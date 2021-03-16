@@ -24,7 +24,7 @@ Note that the DHT should be completely "transparent" in that a client using the 
 - `struct Node` encapsulates a node that provides the Hash Map functionality:
     - pub fn get(key) -> Option\<T\>
     - pub fn insert(key, value) -> bool
-    - pub fn remove(key) -> value
+    - pub fn remove(key) -> Option\<T\>
     - fn forward_request(node, key) -> Option\<T\>
 
 ## Thoughts on Testing
