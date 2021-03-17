@@ -25,8 +25,8 @@ Note that the DHT should be completely "transparent" in that a client using the 
     - pub fn get(key) -> Option\<T\>
     - pub fn insert(key, value) -> bool
     - pub fn remove(key) -> Option\<T\>
-    - fn forward_request(node, key) -> Option\<T\>
-
+    - fn forward_request(node, key) -> Option\<T\> // forward request if the node does not have this key.
+    - fn accept_request(key) -> Option\<T\> // keep listening for incoming requests from other nodes.
 ## Thoughts on Testing
 - Use TDD (Test Driven Development) throughout.
 - Challenges:
