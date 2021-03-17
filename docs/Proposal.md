@@ -51,3 +51,12 @@ Note that the DHT should be completely "transparent" in that a client using the 
 ## Functionality to be completed at Checkpoint
 - Since setting up the test environment seems to be a non trivial task, focus should be to get the environment up and working first.
 - As a first checkpoint, the project should have concrete tests that create the Ring topology and can randomly query or drop nodes.
+
+## DHT flowchart
+![DistributedHashTable](https://user-images.githubusercontent.com/48808456/111398107-37d8b780-8699-11eb-8b35-758199958b06.png)
+
+- The first diagram represents polling in unidirectional fashion achieving fn get() in O(n) time.
+- In O(n) the current node keeps track of only the predecessor and the successor.
+- The second diagram represents polling in a random fashion with fn get() acheived in O(log n) time.
+- In O(log n) the current node keeps track of the predecessor, sucessor and a random node in the ring.
+
