@@ -33,8 +33,10 @@ Note that the DHT should be completely "transparent" in that a client using the 
     - Creating the Chord ring topology in the test environment
     - Creating network partitions
     - Creating large number of nodes
-    - Crashing nodes at random
+    - Polling adjacent nodes
+    - Crashing nodes intentionally and updating adjacent nodes to represent the new state of the ring.
     - Querying nodes at random
+    - Trying to acheive O(log n) turnaround time
 
 ## Thoughts on MVP
 - Ring topology with successful lookups, **but `O(n)` instead of `log(n)`** (if key not present at node, the node simply forwards request to the next node)
@@ -43,7 +45,18 @@ Note that the DHT should be completely "transparent" in that a client using the 
 ## Stretch Goals
 - Full Chord implementation with handling of failures and dynamic node joinings. Lookup must be **log(n)**
 - Robust test suite
+- Introduce real life scenario with applications based off numerous geographical locations able to share data with distributed hash maps.
+- Demonstrate an end-to-end test automated through CI.
 
 ## Functionality to be completed at Checkpoint
 - Since setting up the test environment seems to be a non trivial task, focus should be to get the environment up and working first.
 - As a first checkpoint, the project should have concrete tests that create the Ring topology and can randomly query or drop nodes.
+
+## DHT flowchart
+![DistributedHashTable](https://user-images.githubusercontent.com/48808456/111398107-37d8b780-8699-11eb-8b35-758199958b06.png)
+
+- The first diagram represents polling in unidirectional fashion, achieving `fn get()` in `O(n)` time.
+- In `O(n)`, the current node keeps track of only the predecessor and the successor.
+- The second diagram represents polling using Chord, achieving `fn get()` in `O(log n)` time.
+- In `O(log n)`, the current node keeps track of the predecessor, sucessor and a random node in the ring.
+
