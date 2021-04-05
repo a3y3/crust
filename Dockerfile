@@ -8,4 +8,4 @@ RUN cargo build --bin docker-only
 #Resume normal build. Since the above lines weren't changed, Docker will use the cached dependencies!
 COPY . .
 RUN cargo build
-ENTRYPOINT [ "cargo" ,"run", "--bin", "crust"]
+ENTRYPOINT ["cargo" ,"run", "--bin", "crust"]

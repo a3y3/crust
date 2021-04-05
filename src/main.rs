@@ -1,39 +1,64 @@
 use gotham::router::builder::*;
 use gotham::router::Router;
 use gotham::state::{FromState, State};
-use gotham_derive::{StateData, StaticResponseExtender};
-use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, StateData, StaticResponseExtender)]
-struct PathExtractor {
-    name: String,
-}
+use gotham::helpers::http;
+mod extractor;
+use extractor::PathExtractor;
 
-pub fn echo(state: State) -> (State, String) {
-    let message = {
-        let product = PathExtractor::borrow_from(&state);
-        format!("Product: {}", product.name)
-    };
-
-    (state, message)
-}
-
+/// returns the immediate successor of this node
 pub fn get_successor(state: State) -> (State, &'static str) {
     (state, "node0")
+}
+
+/// add a new key-value pair to the DHT (supplied as POST to /key/)
+pub fn create_value(state: State) -> (State, String) {
+    unimplemented!()
+}
+
+/// returns the value corresponsing to the key in (GET /key/:key)
+pub fn get_value(state: State) -> (State, String) {
+    let key = {
+        let data = PathExtractor::borrow_from(&state);
+        format!("You entered: {}", data.key)
+    };
+    (state, key)
+}
+
+/// update the value corresponding to the supplied key (PATCH /key/:key)
+pub fn update_value(state: State) -> (State, String) {
+    unimplemented!()
+}
+
+/// delete a key value pair (DELETE /key/:key)
+pub fn delete_value(state: State) -> (State, String) {
+    unimplemented!()
 }
 
 fn router() -> Router {
     build_simple_router(|route| {
         route.get("/successor").to(get_successor);
-        route
-            .get("/echo/:name")
-            .with_path_extractor::<PathExtractor>()
-            .to(echo);
+
+        route.scope("/key", |route| {
+            route.post("/").to(create_value);
+            route
+                .get("/:key")
+                .with_path_extractor::<PathExtractor>()
+                .to(get_value);
+            route
+                .patch("/:key")
+                .with_path_extractor::<PathExtractor>()
+                .to(update_value);
+            route
+                .delete("/:key")
+                .with_path_extractor::<PathExtractor>()
+                .to(delete_value);
+        });
     })
 }
 
 pub fn main() {
-    let addr = "127.0.0.1:7878";
+    let addr = "0.0.0.0:8000";
     println!("Listening for requests at http://{}", addr);
     gotham::start(addr, router())
 }
