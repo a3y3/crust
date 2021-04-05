@@ -1,52 +1,41 @@
-use actix_web::{get, web::Path, App, HttpResponse, HttpServer, Responder};
+use gotham::router::builder::*;
+use gotham::router::Router;
+use gotham::state::{FromState, State};
+use gotham_derive::{StateData, StaticResponseExtender};
+use serde::{Deserialize, Serialize};
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    let port: usize = 8000;
-    let mut address = "0.0.0.0:".to_string();
-    address.push_str(&port.to_string());
-    HttpServer::new(||{
-        App::new()
-        .service(get_val)
-        .service(get_successor)
-    }).bind(address)?
-    .run().await
+#[derive(Deserialize, StateData, StaticResponseExtender)]
+struct PathExtractor {
+    name: String,
 }
 
-#[get("/successor")]
-async fn get_successor() -> impl Responder{
-    HttpResponse::Ok().body("node0")
+pub fn echo(state: State) -> (State, String) {
+    let message = {
+        let product = PathExtractor::borrow_from(&state);
+        format!("Product: {}", product.name)
+    };
+
+    (state, message)
 }
 
-#[get("/query/{query}")]
-async fn get_val(Path(query): Path<String>) -> impl Responder{
-    HttpResponse::Ok().body(query)
+pub fn get_successor(state: State) -> (State, &'static str) {
+    (state, "node0")
 }
 
-mod tests {
-    use dockertest::{Composition, Image};
-    const IMAGE_NAME: &str = "crust";
-    const NAME_ARG: &str = "--name";
-    const NAME_VAL: &str = "node";
-    const PORT_ARG: &str = "--port";
-    const PORT_VAL: usize = 20000;
-    #[test]
-    fn test_immediate_successor() {
-        let image = Image::with_repository(IMAGE_NAME);
-        let num_containers: u8 = 3;
-        let mut nodes_vec = Vec::new();
-        for i in 0..num_containers {
-            let mut name_val = NAME_VAL.to_string();
-            name_val.push(i as char);
-            let mut port_val = PORT_VAL.to_string();
-            port_val.push(i as char);
-            let node = Composition::with_image(image.clone()).with_cmd(vec![
-                NAME_ARG.to_string(),
-                name_val,
-                PORT_ARG.to_string(),
-                port_val,
-            ]);
-            nodes_vec.push(node);
-        }
-    }
+fn router() -> Router {
+    build_simple_router(|route| {
+        route.get("/successor").to(get_successor);
+        route
+            .get("/echo/:name")
+            .with_path_extractor::<PathExtractor>()
+            .to(echo);
+    })
 }
+
+pub fn main() {
+    let addr = "127.0.0.1:7878";
+    println!("Listening for requests at http://{}", addr);
+    gotham::start(addr, router())
+}
+
+mod tests;

@@ -3,12 +3,20 @@ name = "crust"
 version = "0.1.0"
 authors = ["a3y3 <sohamssd@gmail.com>"]
 edition = "2018"
+default-run = "crust"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix-web = "3"
 dockertest = "0.2.1"
+gotham = "0.6.0"
+gotham_derive = "0.6.0"
+serde = "1.0.125"
+serde_derive = "1.0.125"
+
+[[bin]]
+name = "crust"
+path = "src/main.rs"
 
 [[bin]]
 name = "docker-only"
