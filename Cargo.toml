@@ -12,4 +12,4 @@ dockertest = "0.2.1"
 
 [[bin]]
 name = "docker-only"
-path = "docker/dummy.rs"
+path = "src/dummy.rs"

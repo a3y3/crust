@@ -8,8 +8,14 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(||{
         App::new()
         .service(get_val)
+        .service(get_successor)
     }).bind(address)?
     .run().await
+}
+
+#[get("/successor")]
+async fn get_successor() -> impl Responder{
+    HttpResponse::Ok().body("node0")
 }
 
 #[get("/query/{query}")]
