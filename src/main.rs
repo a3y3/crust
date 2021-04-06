@@ -2,7 +2,6 @@ use gotham::router::builder::*;
 use gotham::router::Router;
 use gotham::state::{FromState, State};
 
-use gotham::helpers::http;
 mod extractor;
 use extractor::PathExtractor;
 
@@ -42,15 +41,15 @@ fn router() -> Router {
         route.scope("/key", |route| {
             route.post("/").to(create_value);
             route
-                .get("/:key")
+                .get("/:key") // GET /key/1234
                 .with_path_extractor::<PathExtractor>()
                 .to(get_value);
             route
-                .patch("/:key")
+                .patch("/:key") // PATCH /key/1234
                 .with_path_extractor::<PathExtractor>()
                 .to(update_value);
             route
-                .delete("/:key")
+                .delete("/:key") // DELETE /key/1234
                 .with_path_extractor::<PathExtractor>()
                 .to(delete_value);
         });

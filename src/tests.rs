@@ -1,65 +1,44 @@
-use dockertest::{Composition, DockerTest, Image};
-use gotham::helpers::http;
-use gotham::test::TestServer;
-use std::collections::HashMap;
+mod tests {
+    use dockertest::{
+        waitfor::{MessageSource, MessageWait},
+        Composition, DockerTest,
+    };
 
-const IMAGE_NAME: &str = "crust";
-const NAME_ARG: &str = "--name";
-const NAME_VAL: &str = "node";
-const PORT_ARG: &str = "--port";
-const PORT_VAL: usize = 20000;
-use std::sync::{Arc, Mutex};
-use std::{thread, time};
-#[test]
-fn hello_world_test() {
-    // Define our test instance
-    let mut test = DockerTest::new();
+    const IMAGE_NAME: &str = "crust";
+    const DEFAULT_PORT: u32 = 8000;
 
-    // Construct the Composition to be added to the test.
-    // A Composition is an Image configured with environment, arguments, StartPolicy, etc.,
-    // seen as an instance of the Image prior to constructing the Container.
-    let hello = Composition::with_repository("hello-world");
-
-    // Populate the test instance.
-    // The order of compositions added reflect the execution order (depending on StartPolicy).
-    test.add_composition(hello);
-
-    let has_ran: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-    let has_ran_test = has_ran.clone();
-    test.run(|ops| async move {
-        // A handle to operate on the Container.
-        let _container = ops.handle("hello-world");
-
-        // The container is in a running state at this point.
-        // Depending on the Image, it may exit on its own (like this hello-world image)
-        let mut ran = has_ran_test.lock().unwrap();
-        *ran = true;
-    });
-
-    let ran = has_ran.lock().unwrap();
-    assert!(*ran);
-}
-
-#[test]
-fn test_immediate_successor() {
-    let mut test = DockerTest::new();
-    let image = Image::with_repository(IMAGE_NAME);
-    let num_containers: u8 = 1;
-    for i in 0..num_containers {
-        // let mut name_val = NAME_VAL.to_string();
-        // name_val.push(i as char);
-        // let mut port_val = PORT_VAL.to_string();
-        // port_val.push(i as char);
-        let mut node = Composition::with_repository(IMAGE_NAME)
-            .with_cmd(vec!["--init".to_string(), "-p".to_string(), "8000:8000".to_string()]);
-        test.add_composition(node);
+    #[test]
+    fn test_immediate_successor() {
+        let mut test = DockerTest::new();
+        let num_containers = 5;
+        for i in 0..num_containers {
+            let container_name = format!("{}{}", IMAGE_NAME, i);
+            let mut node = Composition::with_repository(IMAGE_NAME)
+                .with_container_name(container_name)
+                .with_wait_for(Box::new(MessageWait {
+                    message: format!("Listening for requests at http://0.0.0.0:{}", DEFAULT_PORT),
+                    source: MessageSource::Stdout,
+                    timeout: 60,
+                }));
+            let port_on_host: u32 = DEFAULT_PORT + i;
+            node.port_map(DEFAULT_PORT, port_on_host);
+            test.add_composition(node);
+        }
+        test.run(|_ops| async move {
+            for i in 0..num_containers {
+                let resp0 =
+                    reqwest::get(format!("http://localhost:{}/successor", DEFAULT_PORT + i))
+                        .await
+                        .unwrap();
+                let result = resp0.text().await.unwrap();
+                let next_num = if i == num_containers - 1 { 0 } else { i + 1 };
+                let expected_successor = format!("node{}", next_num);
+                assert_eq!(
+                    result, expected_successor,
+                    "node{} reported an incorrect successor (actual=left, expected=right)",
+                    i
+                );
+            }
+        });
     }
-    test.run(|ops| async {
-        let resp = reqwest::get("http://localhost:8000/successor")
-            .await
-            .unwrap()
-            .json::<HashMap<String, String>>().await.unwrap();
-        println!("{:#?}", resp);
-        assert_eq!(2, 3);
-    });
 }
