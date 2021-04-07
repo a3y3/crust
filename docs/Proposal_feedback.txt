@@ -1,0 +1,15 @@
+
+Looks to be a nice robust project for a team of 2.
+
+Good progression from core deliverable to strech goals, but would really be nice
+to get the full Chord protocol running with O(log n).
+
+Will want to think about the right types/traits for keys and values.  Both may
+need to be serialized in order to distribute them.
+
+Also, would need to have a protocol for joining the DHT, for distributing
+key-value pairs and lists of nodes, and for recognizing and reconfiguring after
+node failures.
+
+
+Score: 10/10
