@@ -23,10 +23,13 @@ Since the proposal, our focus has been to develop a way to:
 
 - Find a way to do Test Driven Development
   - If we are using docker, how do we set up containers and still remain in the Rust environment (and have the power to do `assert_eq!(response, expected_response)`)? How do we create and shut down containers at will? How do we communicate with a particular container (which in itself, is a node)?
-  - We used a crate called [dockertest](https://docs.rs/dockertest/0.2.1/dockertest/). The crate is designed to create containers from within a Rust test environment, and they implment `Drop` - which means shutting down containers is very easy! After running into many, many (and many) issues with it and talking to the developers, we finally managed to get it to work.
+  - We used a crate called [dockertest](https://docs.rs/dockertest/0.2.1/dockertest/). The crate is designed to create containers from within a Rust test environment, and they implement `Drop` - which means shutting down containers is very easy! After running into many, many (and many) issues with it and talking to the developers, we finally managed to get it to work.
  
 Additionally, we have read and understood the paper itself.
 
+## Current test
+- We create a container with the port 8000 exposed outside the container. The image has a rust base image with a basic implementation of a `GET` request to `/successor` that responds with the value of the current node's immediate successor (e.g., node0 responds with the value node1).
+- The test cases checks for the initial trivial situation where the first container node0 points to node1 as the successor, this assertion will fail. This test case will be fixed as the logic to update neighbor nodes is implemented.
 
 ## Next steps
 - Implement a naive version of the protocol that queries for a key in `O(n)`. 
