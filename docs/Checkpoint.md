@@ -28,8 +28,8 @@ Since the proposal, our focus has been to develop a way to:
 Additionally, we have read and understood the paper itself.
 
 ## Current test
-- We create a container with the port 8000 exposed outside the container, the image has a rust base image with a basic implementation of a get request that responds with the value of the current node (e.g., node0 responds with the value node0) with the end point \successor.
-- The test cases checks for the initial trivial situation where the first container node0 generated points to node1 as the successor, this assertion will fail. This test case will be fixed as the logic to update neighbor nodes is implemented.
+- We create a container with the port 8000 exposed outside the container. The image has a rust base image with a basic implementation of a `GET` request to `/successor` that responds with the value of the current node's immediate successor (e.g., node0 responds with the value node1).
+- The test cases checks for the initial trivial situation where the first container node0 points to node1 as the successor, this assertion will fail. This test case will be fixed as the logic to update neighbor nodes is implemented.
 
 ## Next steps
 - Implement a naive version of the protocol that queries for a key in `O(n)`. 
