@@ -1,9 +1,55 @@
 use gotham::router::builder::*;
 use gotham::router::Router;
 use gotham::state::{FromState, State};
+use gotham::middleware::state::StateMiddleware;
 
 mod extractor;
 use extractor::PathExtractor;
+
+enum Bracket{
+    Open,
+    Closed
+}
+
+struct Interval{
+    m: u64,
+    bracket1: Bracket,
+    val1: u64,
+    bracket2: Bracket,
+    val2: u64
+}
+
+impl Interval{
+    fn new(m: u64, bracket1: Bracket, val1: u64, bracket2: Bracket, val2: u64) -> Self{
+        Interval{m, bracket1, val1, bracket2, val2}
+    }
+
+    /// Needs improvement - right now this method uses a pretty inefficient way to check if a `val` lies between an `Interval. Selecting a `start` and and `end` and walking through each value between them isn't ideal, and we need  a faster way to do this.
+    fn is_in_interval(&self, val: u64) -> bool{
+        let mut start = match self.bracket1{
+            Bracket::Open => self.val1 + 1,
+            Bracket::Closed => self.val1
+        };
+        let end = match self.bracket2{
+            Bracket::Open => self.val2 + 1,
+            Bracket::Closed => self.val2
+        };
+        
+        while start != end{
+            if start == val{
+                return true;
+            }
+            start += 1;
+        }
+        val == start
+    }
+}
+
+struct FingerTable{
+    start: usize,
+    interval: Interval,
+    node: u64
+}
 
 /// returns the immediate successor of this node
 pub fn get_successor(state: State) -> (State, &'static str) {
@@ -35,6 +81,7 @@ pub fn delete_value(state: State) -> (State, String) {
 }
 
 fn router() -> Router {
+    
     build_simple_router(|route| {
         route.get("/successor").to(get_successor);
 
