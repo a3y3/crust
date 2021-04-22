@@ -200,6 +200,7 @@ dependencies = [
  "dockertest",
  "gotham",
  "gotham_derive",
+ "mime",
  "reqwest",
  "serde",
  "serde_derive",
