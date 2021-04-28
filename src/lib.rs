@@ -2,6 +2,7 @@ use gotham::handler::HandlerError;
 use gotham_derive::StateData;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_derive::Serialize;
+use serde_json;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::env;
@@ -9,7 +10,6 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
-use serde_json;
 
 const M: u64 = 64;
 const PORT: usize = 8000;
@@ -28,29 +28,6 @@ struct Interval {
     val1: u64,
     bracket2: Bracket,
     val2: u64,
-}
-
-impl Serialize for Interval {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let first_bracket = match self.bracket1 {
-            Bracket::Open => '(',
-            Bracket::Closed => '[',
-        };
-        let second_bracket = match self.bracket2 {
-            Bracket::Open => ')',
-            Bracket::Closed => ']',
-        };
-        let mut state = serializer.serialize_struct("Interval", 4)?;
-        state.serialize_field("bracket1", &first_bracket)?;
-        state.serialize_field("val1", &self.val1)?;
-        state.serialize_field("bracket2", &second_bracket)?;
-        state.serialize_field("val2", &self.val2)?;
-
-        state.end()
-    }
 }
 
 impl fmt::Display for Interval {
@@ -103,12 +80,26 @@ impl Interval {
 }
 
 #[allow(dead_code)] //todo remove this later
-#[derive(Serialize)]
 struct FingerTableEntry {
     start: u64,
     interval: Interval,
     successor: u64,
     node_ip: IpAddr,
+}
+
+impl Serialize for FingerTableEntry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("Interval", 4)?;
+        state.serialize_field("start", &self.start)?;
+        state.serialize_field("interval", &format!("{}", self.interval))?;
+        state.serialize_field("successor", &self.successor)?;
+        state.serialize_field("node_ip", &self.node_ip)?;
+
+        state.end()
+    }
 }
 
 impl FingerTableEntry {
@@ -124,18 +115,18 @@ impl FingerTableEntry {
 
 #[derive(Serialize)]
 struct FingerTable {
-    finger_table: Vec<FingerTableEntry>,
+    fingers: Vec<FingerTableEntry>,
 }
 
 impl FingerTable {
     fn new() -> Self {
         FingerTable {
-            finger_table: Vec::new(),
+            fingers: Vec::new(),
         }
     }
 
     fn add_entry(&mut self, entry: FingerTableEntry) {
-        self.finger_table.push(entry);
+        self.fingers.push(entry);
     }
 }
 
@@ -145,6 +136,27 @@ pub struct ChordNode {
     hash_map: Arc<Mutex<HashMap<String, String>>>,
     self_ip: IpAddr,
     predecessor: Arc<Mutex<IpAddr>>,
+}
+
+impl Serialize for ChordNode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let finger_table = self.finger_table.lock().unwrap();
+        let self_id = get_identifier(&self.self_ip.to_string());
+        let predecessor = self.predecessor.lock().unwrap();
+        let predecessor_id = get_identifier(&(*predecessor).to_string());
+
+        let mut state = serializer.serialize_struct("Interval", 4)?;
+        state.serialize_field("finger_table", &*finger_table)?;
+        state.serialize_field("hash_map", &"fixme: unimplemented!()")?;
+        state.serialize_field("self_ip", &self.self_ip)?;
+        state.serialize_field("self_id", &self_id)?;
+        state.serialize_field("predecessor", &*predecessor)?;
+        state.serialize_field("predecessor_id", &predecessor_id)?;
+        state.end()
+    }
 }
 
 impl ChordNode {
@@ -165,22 +177,23 @@ impl ChordNode {
         }
     }
 
-    pub fn info(&self) -> Vec<u8>{
-        let table = self.finger_table.lock().unwrap();
-        serde_json::to_vec(&*table).expect("Can't serialize table")
+    pub fn info(&self) -> String {
+        serde_json::to_string_pretty(self).expect("Can't serialize table")
     }
 
     pub fn get_successor(&self) -> IpAddr {
         let table = self.finger_table.lock().unwrap();
-        (*table).finger_table.get(0).unwrap().node_ip
+        (*table).fingers.get(0).unwrap().node_ip
     }
 
     pub fn update_successor(&mut self, new_succ: IpAddr) {
         let mut table = self.finger_table.lock().unwrap();
-        let prev_entry = table.finger_table.get_mut(0).unwrap();
+        let prev_entry = table.fingers.get_mut(0).unwrap();
+        let new_id = get_identifier(&new_succ.to_string());
         println!("prev succ: {}", prev_entry.node_ip);
         (*prev_entry).node_ip = new_succ;
-        println!("Updated prev succ to {}", prev_entry.node_ip);
+        (*prev_entry).successor = new_id;
+        println!("Updated succ to {} (id:{})", prev_entry.node_ip, new_id);
     }
 
     pub fn get_predecessor(&self) -> IpAddr {
@@ -192,20 +205,21 @@ impl ChordNode {
     }
 
     pub async fn calculate_successor(&self, id: &String) -> Result<IpAddr, HandlerError> {
+        let id: u64 = id.parse()?;
+        assert!(id < M);
         let pred = self.find_predecessor(id).await?;
         let successor_ip = get_req(pred, HTTP_SUCCESSOR).await?;
         Ok(successor_ip.parse()?)
     }
 
-    async fn find_predecessor(&self, id: &String) -> Result<IpAddr, HandlerError> {
+    async fn find_predecessor(&self, id: u64) -> Result<IpAddr, HandlerError> {
         let mut n_dash = self.self_ip;
         loop {
-            let n_dash_hash = get_identifier(&n_dash.to_string());
+            let n_dash_id = get_identifier(&n_dash.to_string());
             let successor = get_req(n_dash, HTTP_SUCCESSOR).await?;
             let successor_hash = get_identifier(&successor);
-            let interval =
-                Interval::new(Bracket::Open, n_dash_hash, successor_hash, Bracket::Closed);
-            if interval.contains(get_identifier(&id)) {
+            let interval = Interval::new(Bracket::Open, n_dash_id, successor_hash, Bracket::Closed);
+            if interval.contains(id) {
                 break;
             }
             n_dash = get_req(n_dash, &format!("{}{}/", HTTP_SUCCESSOR_CFP, id))
@@ -217,13 +231,15 @@ impl ChordNode {
     }
 
     pub fn closest_preceding_finger(&self, id: &String) -> IpAddr {
+        let id: u64 = id.parse().unwrap();
+        assert!(id < M);
         let interval = Interval::new(
             Bracket::Open,
             get_identifier(&self.self_ip.to_string()),
-            get_identifier(id),
+            id,
             Bracket::Open,
         );
-        for entry in self.finger_table.lock().unwrap().finger_table.iter().rev() {
+        for entry in self.finger_table.lock().unwrap().fingers.iter().rev() {
             println!("Checking if {} is in {}", entry.successor, interval);
             if interval.contains(entry.successor) {
                 return entry.node_ip;

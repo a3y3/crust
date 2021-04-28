@@ -80,7 +80,7 @@ async fn update_predecessor(state: &mut State) -> Result<Response<Body>, Handler
 async fn calculate_successor(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let id = &PathExtractor::borrow_from(&state).key;
-    println!("Got id as {}", id);
+    println!("calculate_successor: calculating successor for: {}", id);
     let res = node.calculate_successor(id).await?;
     let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, res.to_string());
     Ok(response)
@@ -89,7 +89,7 @@ async fn calculate_successor(state: &mut State) -> Result<Response<Body>, Handle
 fn closest_preceding_finger(state: State) -> (State, String) {
     let node = ChordNode::borrow_from(&state);
     let id = &PathExtractor::borrow_from(&state).key;
-    println!("Got id as {}", id);
+    println!("CFP: Finding CFP for {}", id);
     let res = node.closest_preceding_finger(id);
     (state, res.to_string())
 }
@@ -110,12 +110,8 @@ fn create_value(_state: State) -> (State, String) {
 }
 
 /// returns the value corresponsing to the key in (GET /key/:key)
-fn get_value(state: State) -> (State, String) {
-    let key = {
-        let data = PathExtractor::borrow_from(&state);
-        format!("You entered: {}", data.key)
-    };
-    (state, key)
+fn get_value(_state: State) -> (State, String) {
+    unimplemented!()
 }
 
 /// update the value corresponding to the supplied key (PATCH /key/:key)
