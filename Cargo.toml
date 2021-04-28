@@ -12,9 +12,13 @@ gotham = "0.6.0"
 gotham_derive = "0.6.0"
 serde = "1.0.125"
 serde_derive = "1.0.125"
+serde_json = "1.0.64"
 reqwest = { version = "0.11", features = ["json"] }
 tokio = "1.0"
 mime = "0.3.16"
+url = "2.1"
+anyhow = "1.0.40"
+simple-error = "0.2.3"
 
 [[bin]]
 name = "crust"

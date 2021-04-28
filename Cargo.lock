@@ -197,6 +197,7 @@ checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
 name = "crust"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dockertest",
  "gotham",
  "gotham_derive",
@@ -204,7 +205,10 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_derive",
+ "serde_json",
+ "simple-error",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -1368,6 +1372,12 @@ checksum = "16f1d0fef1604ba8f7a073c7e701f213e056707210e9020af4528e0101ce11a6"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "simple-error"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc47a29ce97772ca5c927f75bac34866b16d64e07f330c3248e2d7226623901b"
 
 [[package]]
 name = "slab"

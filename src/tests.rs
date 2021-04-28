@@ -1,9 +1,9 @@
+#[allow(dead_code, unused_imports)]
 mod tests {
     use dockertest::{
         waitfor::{MessageSource, MessageWait},
         Composition, DockerTest,
     };
-
     const IMAGE_NAME: &str = "crust";
     const DEFAULT_PORT: u32 = 8000;
 
