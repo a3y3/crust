@@ -258,11 +258,14 @@ pub fn initialize_node() -> ChordNode {
         // first node
         let mut finger_table = FingerTable::new();
         let hash_map = HashMap::new();
-        let start = get_start(self_id, 0);
-        let k_plus_one_start = get_start(self_id, 1);
-        let interval = Interval::new(Bracket::Closed, start, k_plus_one_start, Bracket::Open);
-        let first_entry = FingerTableEntry::new(start, interval, self_id, self_ip);
-        finger_table.add_entry(first_entry);
+        let m = (M as f64).log2() as u32;
+        for i in 0..m{
+            let start = get_start(self_id, i);
+            let k_plus_one_start = get_start(self_id, i+1);
+            let interval = Interval::new(Bracket::Closed, start, k_plus_one_start, Bracket::Open);
+            let first_entry = FingerTableEntry::new(start, interval, self_id, self_ip);
+            finger_table.add_entry(first_entry);
+        }
 
         return ChordNode::new(finger_table, hash_map, self_ip, self_ip);
     } else {
