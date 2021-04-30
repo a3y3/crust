@@ -1,4 +1,0 @@
-# I wish I was in the docker/ folder and not root, but apparently Docker doesn't look for me anywhere but here :/
-docs/
-.git/
-target/
