@@ -2,7 +2,6 @@ use gotham::handler::HandlerError;
 use gotham_derive::StateData;
 use reqwest::Response;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use serde_derive::Serialize;
 use serde_json;
 use simple_error::SimpleError;
 use std::collections::hash_map::DefaultHasher;

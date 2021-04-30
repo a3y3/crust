@@ -94,13 +94,9 @@ fn closest_preceding_finger(state: State) -> (State, String) {
     (state, res.to_string())
 }
 
-async fn info(state: &mut State) -> Result<Response<Body>, HandlerError>{
+async fn info(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
-    let resp = create_response(
-        &state,
-        StatusCode::OK,
-        mime::APPLICATION_JSON,
-        node.info());
+    let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, node.info());
     Ok(resp)
 }
 
@@ -122,15 +118,6 @@ fn update_value(_state: State) -> (State, String) {
 /// delete a key value pair (DELETE /key/:key)
 fn delete_value(_state: State) -> (State, String) {
     unimplemented!()
-}
-
-async fn next_node(state: &mut State) -> Result<Response<Body>, HandlerError> {
-    let ip = &PathExtractor::borrow_from(&state).key;
-    println!("ip: {}", ip);
-    let resp = reqwest::get(format!("http://{}:{}/successor/", ip, PORT)).await?;
-    let result = resp.text().await?;
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, result);
-    Ok(response)
 }
 
 fn router(chord: ChordNode) -> Router {
@@ -156,10 +143,6 @@ fn router(chord: ChordNode) -> Router {
             route.patch("/").to_async_borrowing(update_predecessor);
         });
         route.get("/info").to_async_borrowing(info);
-        route
-            .get("/comms/check/:key")
-            .with_path_extractor::<PathExtractor>()
-            .to_async_borrowing(next_node);
 
         route.scope("/key", |route| {
             route.post("/").to(create_value);
