@@ -259,9 +259,9 @@ pub fn initialize_node() -> ChordNode {
         let mut finger_table = FingerTable::new();
         let hash_map = HashMap::new();
         let m = (M as f64).log2() as u32;
-        for i in 0..m{
+        for i in 0..m {
             let start = get_start(self_id, i);
-            let k_plus_one_start = get_start(self_id, i+1);
+            let k_plus_one_start = get_start(self_id, i + 1);
             let interval = Interval::new(Bracket::Closed, start, k_plus_one_start, Bracket::Open);
             let first_entry = FingerTableEntry::new(start, interval, self_id, self_ip);
             finger_table.add_entry(first_entry);
@@ -269,8 +269,11 @@ pub fn initialize_node() -> ChordNode {
 
         return ChordNode::new(finger_table, hash_map, self_ip, self_ip);
     } else {
-        println!("Initializing node...");
-        join(self_ip, args[1].parse().unwrap())
+        let node = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(join(self_ip, args[1].parse().unwrap()))
+            .unwrap();
+        node
     }
 }
 
@@ -278,12 +281,15 @@ fn get_start(n: u64, k: u32) -> u64 {
     (n + u64::pow(2, k)) % M
 }
 
-fn join(self_ip: IpAddr, existing_node: IpAddr) -> ChordNode {
-    let node = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(init_finger_table(self_ip, existing_node))
-        .unwrap();
-    node
+async fn join(self_ip: IpAddr, existing_node: IpAddr) -> Result<ChordNode, HandlerError> {
+    println!("Initializing my finger tables...");
+    let node = init_finger_table(self_ip, existing_node).await?;
+    println!("Done.");
+    println!("Skipping updating others' finger tables...");
+    update_others(self_ip).await?;
+    println!("Skipping moving keys...");
+    move_keys().await?;
+    Ok(node)
 }
 
 async fn init_finger_table(
@@ -308,8 +314,30 @@ async fn init_finger_table(
     println!("My predecessor is {}", predecessor);
     patch_req(successor.parse()?, HTTP_PREDECESSOR, vec![("ip", self_ip)]).await?;
     println!("Patched my successor so that its predecessor is me");
-    patch_req(predecessor.parse()?, HTTP_SUCCESSOR, vec![("ip", self_ip)]).await?;
-    println!("Patched my predecesssor so that its successor is me");
+    // patch_req(predecessor.parse()?, HTTP_SUCCESSOR, vec![("ip", self_ip)]).await?;
+    // println!("Patched my predecesssor so that its successor is me");
+    // TODO remove this comment after it's verified that this happens indiretly as a call to update_others().
+    let m = (M as f64).log2() as u32;
+    for i in 0..m - 1 {
+        let start = get_start(self_id, i + 1);
+        let start_plus_one = get_start(self_id, i + 2);
+        let interval_table = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
+        let prev_entry = finger_table.fingers.get(i as usize).unwrap();
+        let interval_check = Interval::new(
+            Bracket::Closed,
+            self_id,
+            prev_entry.successor,
+            Bracket::Open,
+        );
+        let (succ_ip, succ_id) = if interval_check.contains(start) {
+            (prev_entry.node_ip, prev_entry.successor)
+        } else {
+            let ip = get_req(existing_node, &format!("{}{}", HTTP_SUCCESSOR, start)).await?;
+            (ip.parse()?, get_identifier(&ip))
+        };
+        let entry = FingerTableEntry::new(start, interval_table, succ_id, succ_ip);
+        finger_table.add_entry(entry);
+    }
 
     Ok(ChordNode::new(
         finger_table,
@@ -317,6 +345,14 @@ async fn init_finger_table(
         self_ip,
         predecessor.parse()?,
     ))
+}
+
+async fn update_others(self_id: IpAddr) -> Result<(), HandlerError> {
+    Ok(())
+}
+
+async fn move_keys() -> Result<(), HandlerError> {
+    Ok(())
 }
 
 async fn get_req(ip: IpAddr, path: &str) -> Result<String, HandlerError> {
