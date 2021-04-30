@@ -50,8 +50,8 @@ async fn update_successor(state: &mut State) -> Result<Response<Body>, HandlerEr
 /// returns the immediate successor of this node (GET /predecessor/)
 fn get_predecessor(state: State) -> (State, String) {
     let node = ChordNode::borrow_from(&state);
-    let successor = node.get_predecessor();
-    (state, successor.to_string())
+    let predecessor = node.get_predecessor();
+    (state, predecessor.to_string())
 }
 
 async fn update_predecessor(state: &mut State) -> Result<Response<Body>, HandlerError> {

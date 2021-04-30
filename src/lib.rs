@@ -1,12 +1,13 @@
 use gotham::handler::HandlerError;
 use gotham_derive::StateData;
+use reqwest::Response;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_derive::Serialize;
 use serde_json;
+use simple_error::SimpleError;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::env;
-use std::fmt;
+use std::{env, fmt};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
@@ -17,6 +18,7 @@ const PORT: usize = 8000;
 const HTTP_SUCCESSOR: &str = "successor/";
 const HTTP_SUCCESSOR_CFP: &str = "successor/cfp/";
 const HTTP_PREDECESSOR: &str = "predecessor/";
+const HTTP_FINGER_TABLE: &str = "fingertable/";
 
 enum Bracket {
     Open,
@@ -113,26 +115,9 @@ impl FingerTableEntry {
     }
 }
 
-#[derive(Serialize)]
-struct FingerTable {
-    fingers: Vec<FingerTableEntry>,
-}
-
-impl FingerTable {
-    fn new() -> Self {
-        FingerTable {
-            fingers: Vec::new(),
-        }
-    }
-
-    fn add_entry(&mut self, entry: FingerTableEntry) {
-        self.fingers.push(entry);
-    }
-}
-
 #[derive(Clone, StateData)]
 pub struct ChordNode {
-    finger_table: Arc<Mutex<FingerTable>>,
+    finger_table: Arc<Mutex<Vec<FingerTableEntry>>>,
     hash_map: Arc<Mutex<HashMap<String, String>>>,
     self_ip: IpAddr,
     predecessor: Arc<Mutex<IpAddr>>,
@@ -161,7 +146,7 @@ impl Serialize for ChordNode {
 
 impl ChordNode {
     fn new(
-        finger_table: FingerTable,
+        finger_table: Vec<FingerTableEntry>,
         hash_map: HashMap<String, String>,
         self_ip: IpAddr,
         predecessor: IpAddr,
@@ -183,12 +168,12 @@ impl ChordNode {
 
     pub fn get_successor(&self) -> IpAddr {
         let table = self.finger_table.lock().unwrap();
-        (*table).fingers.get(0).unwrap().node_ip
+        (*table).get(0).unwrap().node_ip
     }
 
     pub fn update_successor(&mut self, new_succ: IpAddr) {
         let mut table = self.finger_table.lock().unwrap();
-        let prev_entry = table.fingers.get_mut(0).unwrap();
+        let prev_entry = table.get_mut(0).unwrap();
         let new_id = get_identifier(&new_succ.to_string());
         println!("prev succ: {}", prev_entry.node_ip);
         (*prev_entry).node_ip = new_succ;
@@ -207,12 +192,12 @@ impl ChordNode {
     pub async fn calculate_successor(&self, id: &String) -> Result<IpAddr, HandlerError> {
         let id: u64 = id.parse()?;
         assert!(id < M);
-        let pred = self.find_predecessor(id).await?;
+        let pred = self.calculate_predecessor(id).await?;
         let successor_ip = get_req(pred, HTTP_SUCCESSOR).await?;
         Ok(successor_ip.parse()?)
     }
 
-    async fn find_predecessor(&self, id: u64) -> Result<IpAddr, HandlerError> {
+    async fn calculate_predecessor(&self, id: u64) -> Result<IpAddr, HandlerError> {
         let mut n_dash = self.self_ip;
         loop {
             let n_dash_id = get_identifier(&n_dash.to_string());
@@ -239,7 +224,7 @@ impl ChordNode {
             id,
             Bracket::Open,
         );
-        for entry in self.finger_table.lock().unwrap().fingers.iter().rev() {
+        for entry in self.finger_table.lock().unwrap().iter().rev() {
             println!("Checking if {} is in {}", entry.successor, interval);
             if interval.contains(entry.successor) {
                 return entry.node_ip;
@@ -256,7 +241,7 @@ pub fn initialize_node() -> ChordNode {
     println!("My ip is {} and my ID is {}", self_ip, self_id);
     if args.len() == 1 {
         // first node
-        let mut finger_table = FingerTable::new();
+        let mut finger_table = Vec::new();
         let hash_map = HashMap::new();
         let m = (M as f64).log2() as u32;
         for i in 0..m {
@@ -264,7 +249,7 @@ pub fn initialize_node() -> ChordNode {
             let k_plus_one_start = get_start(self_id, i + 1);
             let interval = Interval::new(Bracket::Closed, start, k_plus_one_start, Bracket::Open);
             let first_entry = FingerTableEntry::new(start, interval, self_id, self_ip);
-            finger_table.add_entry(first_entry);
+            finger_table.push(first_entry);
         }
 
         return ChordNode::new(finger_table, hash_map, self_ip, self_ip);
@@ -286,7 +271,7 @@ async fn join(self_ip: IpAddr, existing_node: IpAddr) -> Result<ChordNode, Handl
     let node = init_finger_table(self_ip, existing_node).await?;
     println!("Done.");
     println!("Skipping updating others' finger tables...");
-    update_others(self_ip).await?;
+    update_others(self_ip, &node).await?;
     println!("Skipping moving keys...");
     move_keys().await?;
     Ok(node)
@@ -308,8 +293,8 @@ async fn init_finger_table(
         get_identifier(&successor),
         successor.parse()?,
     );
-    let mut finger_table = FingerTable::new();
-    finger_table.add_entry(first_entry);
+    let mut finger_table = Vec::new();
+    finger_table.push(first_entry);
     let predecessor = get_req(successor.parse()?, HTTP_PREDECESSOR).await?;
     println!("My predecessor is {}", predecessor);
     patch_req(successor.parse()?, HTTP_PREDECESSOR, vec![("ip", self_ip)]).await?;
@@ -322,7 +307,7 @@ async fn init_finger_table(
         let start = get_start(self_id, i + 1);
         let start_plus_one = get_start(self_id, i + 2);
         let interval_table = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
-        let prev_entry = finger_table.fingers.get(i as usize).unwrap();
+        let prev_entry = finger_table.get(i as usize).unwrap();
         let interval_check = Interval::new(
             Bracket::Closed,
             self_id,
@@ -336,7 +321,7 @@ async fn init_finger_table(
             (ip.parse()?, get_identifier(&ip))
         };
         let entry = FingerTableEntry::new(start, interval_table, succ_id, succ_ip);
-        finger_table.add_entry(entry);
+        finger_table.push(entry);
     }
 
     Ok(ChordNode::new(
@@ -347,7 +332,14 @@ async fn init_finger_table(
     ))
 }
 
-async fn update_others(self_id: IpAddr) -> Result<(), HandlerError> {
+async fn update_others(self_ip: IpAddr, node: &ChordNode) -> Result<(), HandlerError> {
+    let m = (M as f64).log2() as u32;
+    for i in 0..m {
+        let self_id = get_identifier(&self_ip.to_string());
+        let prev_id = (self_id - u64::pow(2, i)) % M;
+        let p = node.calculate_predecessor(prev_id).await?;
+        patch_req(p, HTTP_FINGER_TABLE, vec![("ip", self_ip)]).await?;
+    }
     Ok(())
 }
 
@@ -357,7 +349,8 @@ async fn move_keys() -> Result<(), HandlerError> {
 
 async fn get_req(ip: IpAddr, path: &str) -> Result<String, HandlerError> {
     let resp = reqwest::get(format!("http://{}:{}/{}", ip, PORT, path)).await?;
-    Ok(resp.text().await?)
+    let text = request_unsuccessful(resp, "GET").await?;
+    Ok(text)
 }
 
 async fn patch_req<T, U>(ip: IpAddr, path: &str, data: Vec<(T, U)>) -> Result<(), HandlerError>
@@ -366,12 +359,26 @@ where
     U: Serialize + Sized,
 {
     let client = reqwest::Client::new();
-    client
+    let response = client
         .patch(format!("http://{}:{}/{}", ip, PORT, path))
         .form(&data)
         .send()
         .await?;
+    request_unsuccessful(response, "PATCH").await?;
     Ok(())
+}
+
+async fn request_unsuccessful(response: Response, req_type: &str) -> Result<String, HandlerError> {
+    let status = response.status();
+    if status != 200 {
+        let error = SimpleError::new(format!(
+            "Received error from {} req: {}",
+            req_type, response.text().await?
+        ));
+        let handler_error = HandlerError::from(error).with_status(status);
+        return Err(handler_error);
+    }
+    Ok(response.text().await?)
 }
 
 fn get_self_ip() -> IpAddr {
