@@ -7,10 +7,10 @@ use gotham::pipeline::single_middleware;
 use gotham::router::builder::*;
 use gotham::router::Router;
 use gotham::state::{FromState, State};
-use simple_error::SimpleError;
-use url::form_urlencoded;
-
 use mime::TEXT_PLAIN;
+use simple_error::SimpleError;
+use std::net::IpAddr;
+use url::form_urlencoded;
 
 mod extractor;
 use extractor::PathExtractor;
@@ -89,7 +89,7 @@ async fn calculate_successor(state: &mut State) -> Result<Response<Body>, Handle
 fn closest_preceding_finger(state: State) -> (State, String) {
     let node = ChordNode::borrow_from(&state);
     let id = &PathExtractor::borrow_from(&state).key;
-    println!("CFP: Finding CFP for {}", id);
+    println!("cpf: Finding cpf for {}", id);
     let res = node.closest_preceding_finger(id);
     (state, res.to_string())
 }
@@ -98,6 +98,29 @@ async fn info(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, node.info());
     Ok(resp)
+}
+async fn update_finger_table(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let full_body = body::to_bytes(Body::take_from(state)).await?;
+    let data = form_urlencoded::parse(&full_body).into_owned();
+    let mut n = String::new();
+    let mut i = String::new();
+    for (key, value) in data {
+        if key == "n" {
+            n = value;
+        } else if key == "i" {
+            i = value;
+        } else {
+            let error = SimpleError::new(format!("Invalid key {}, expected key: ip.", key));
+            let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
+            return Err(handler_error);
+        }
+    }
+    let s: IpAddr = n.parse()?;
+    let i: u64 = i.parse()?;
+    let node = state.borrow_mut::<ChordNode>();
+    node.update_finger_table(s, i).await?;
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
+    Ok(response)
 }
 
 /// add a new key-value pair to the DHT (supplied as POST to /key/)
@@ -134,7 +157,7 @@ fn router(chord: ChordNode) -> Router {
                 .with_path_extractor::<PathExtractor>()
                 .to_async_borrowing(calculate_successor);
             route
-                .get("/cfp/:key")
+                .get("/cpf/:key")
                 .with_path_extractor::<PathExtractor>()
                 .to(closest_preceding_finger);
         });
@@ -143,7 +166,9 @@ fn router(chord: ChordNode) -> Router {
             route.patch("/").to_async_borrowing(update_predecessor);
         });
         route.get("/info").to_async_borrowing(info);
-
+        route
+            .patch("/fingertable")
+            .to_async_borrowing(update_finger_table);
         route.scope("/key", |route| {
             route.post("/").to(create_value);
             route
@@ -162,11 +187,12 @@ fn router(chord: ChordNode) -> Router {
     })
 }
 
-pub fn main() {
+fn main() {
     let chord = initialize_node();
     let addr = format!("0.0.0.0:{}", PORT);
     println!("Listening for requests at http://{}", addr);
-    gotham::start(addr, router(chord))
+    gotham::start(addr, router(chord));
+    println!("Reached here");
 }
 
 mod tests;
