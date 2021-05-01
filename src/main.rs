@@ -110,7 +110,7 @@ async fn update_finger_table(state: &mut State) -> Result<Response<Body>, Handle
         } else if key == "i" {
             i = value;
         } else {
-            let error = SimpleError::new(format!("Invalid key {}, expected key: ip.", key));
+            let error = SimpleError::new(format!("Invalid key {}, expected key: n or i.", key));
             let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
             return Err(handler_error);
         }
@@ -192,7 +192,6 @@ fn main() {
     let addr = format!("0.0.0.0:{}", PORT);
     println!("Listening for requests at http://{}", addr);
     gotham::start(addr, router(chord));
-    println!("Reached here");
 }
 
 mod tests;
