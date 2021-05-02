@@ -16,6 +16,7 @@ mod extractor;
 use extractor::PathExtractor;
 mod lib;
 use lib::initialize_node;
+use lib::start_stabilize_thread;
 use lib::ChordNode;
 
 const PORT: usize = 8000;
@@ -69,7 +70,7 @@ async fn update_predecessor(state: &mut State) -> Result<Response<Body>, Handler
         return Err(handler_error);
     }
 
-    let node = state.borrow_mut::<ChordNode>();
+    let node = state.borrow::<ChordNode>();
     println!("Will update my predecessor to {}", ip);
     node.update_predecessor(ip.parse()?);
     let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
@@ -123,6 +124,26 @@ async fn update_finger_table(state: &mut State) -> Result<Response<Body>, Handle
     Ok(response)
 }
 
+async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError>{
+    let full_body = body::to_bytes(Body::take_from(state)).await?;
+    let data = form_urlencoded::parse(&full_body).into_owned();
+    let mut n = String::new();
+    for (key, value) in data {
+        if key == "n" {
+            n = value;
+        }
+    }
+    if n == "" {
+        let error = SimpleError::new(format!("Invalid data, expected n: IP address of node that created this PATCH request"));
+        let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
+        return Err(handler_error);
+    }
+
+    let node = state.borrow::<ChordNode>();
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
+    node.notify(n.parse()?);
+    Ok(response)
+}
 /// add a new key-value pair to the DHT (supplied as POST to /key/)
 fn create_value(_state: State) -> (State, String) {
     unimplemented!()
@@ -169,6 +190,7 @@ fn router(chord: ChordNode) -> Router {
         route
             .patch("/fingertable")
             .to_async_borrowing(update_finger_table);
+        route.patch("/notify").to_async_borrowing(notify);
         route.scope("/key", |route| {
             route.post("/").to(create_value);
             route
@@ -189,6 +211,7 @@ fn router(chord: ChordNode) -> Router {
 
 fn main() {
     let chord = initialize_node();
+    start_stabilize_thread(chord.clone());
     let addr = format!("0.0.0.0:{}", PORT);
     println!("Listening for requests at http://{}", addr);
     gotham::start(addr, router(chord));
