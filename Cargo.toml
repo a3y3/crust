@@ -19,6 +19,7 @@ mime = "0.3.16"
 url = "2.1"
 anyhow = "1.0.40"
 simple-error = "0.2.3"
+rand = "0.8.3"
 
 [[bin]]
 name = "crust"

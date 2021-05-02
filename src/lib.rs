@@ -1,5 +1,6 @@
 use gotham::handler::HandlerError;
 use gotham_derive::StateData;
+use rand::Rng;
 use reqwest::Response;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json;
@@ -292,6 +293,9 @@ impl ChordNode {
 
             // notify successor about self_ip
             patch_req(succ_ip, HTTP_NOTIFY, vec![("n", self.self_ip.to_string())]).await?;
+
+            // fix fingers
+            self.fix_fingers().await?;
         }
     }
 
@@ -304,6 +308,27 @@ impl ChordNode {
         if (predecessor == self.self_ip) || (int_predecessor_to_self.contains(other_id)) {
             self.update_predecessor(other_node);
         }
+    }
+
+    async fn fix_fingers(&self) -> Result<(), HandlerError> {
+        let m = (M as f64).log2() as u32;
+        let rand_idx = rand::thread_rng().gen_range(0..m) as usize;
+
+        let start = {
+            let table = self.finger_table.lock().unwrap();
+            let rand_entry = table.get(rand_idx).unwrap();
+            rand_entry.start
+        };
+
+        let succ = self.calculate_successor(&start.to_string()).await?;
+        let succ_id = get_identifier(&succ.to_string());
+        {
+            let mut table = self.finger_table.lock().unwrap();
+            let rand_entry = table.get_mut(rand_idx).unwrap();
+            rand_entry.node_ip = succ;
+            rand_entry.successor = succ_id;
+        }
+        Ok(())
     }
 }
 
@@ -357,7 +382,7 @@ async fn init_finger_table(
     let mut finger_table = Vec::new();
     for i in 0..m {
         let start = get_start(self_id, i);
-        let start_plus_one = get_start(self_id, i+1);
+        let start_plus_one = get_start(self_id, i + 1);
         let interval = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
         let succ_ip = if i == 0 {
             let succ_ip = get_req(existing_node, &format!("{}{}/", HTTP_SUCCESSOR, start)).await?;
