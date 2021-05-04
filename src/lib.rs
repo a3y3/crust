@@ -269,7 +269,7 @@ impl ChordNode {
                 pred,
                 HTTP_FINGER_TABLE,
                 vec![("n", s.to_string()), ("i", i.to_string())],
-                self
+                self,
             )
             .await?;
         }
@@ -280,7 +280,6 @@ impl ChordNode {
     async fn stabilize(&mut self) -> Result<(), HandlerError> {
         loop {
             thread::sleep(Duration::new(STABILIZE_INTERVAL, 0));
-            println!("Running stabilize...");
             let succ_ip = self.get_successor();
             let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR, self).await?;
             let successors_predecessor_id = get_identifier(&successors_predecessor);
@@ -289,11 +288,18 @@ impl ChordNode {
             let int_self_to_successor =
                 Interval::new(Bracket::Open, self_id, succ_id, Bracket::Open);
             if int_self_to_successor.contains(successors_predecessor_id) {
+                println!("stabilize() found a new successor, updating...");
                 self.update_successor(successors_predecessor.parse()?);
             }
 
             // notify successor about self_ip
-            patch_req(succ_ip, HTTP_NOTIFY, vec![("n", self.self_ip.to_string())], self).await?;
+            patch_req(
+                succ_ip,
+                HTTP_NOTIFY,
+                vec![("n", self.self_ip.to_string())],
+                self,
+            )
+            .await?;
 
             // fix fingers
             self.fix_fingers().await?;
@@ -334,6 +340,7 @@ impl ChordNode {
 
     async fn handle_failure(&self) {
         // I REALLY think the return type should be () - let's see how that works out.
+        
     }
 }
 
@@ -390,7 +397,13 @@ async fn init_finger_table(
         let start_plus_one = get_start(self_id, i + 1);
         let interval = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
         let succ_ip = if i == 0 {
-            let succ_ip = reqwest::get(format!("http://{}:{}/{}", existing_node, PORT, HTTP_SUCCESSOR)).await?.text().await?;
+            let succ_ip = reqwest::get(format!(
+                "http://{}:{}/{}",
+                existing_node, PORT, HTTP_SUCCESSOR
+            ))
+            .await?
+            .text()
+            .await?;
             println!("My successor is {}", succ_ip);
             succ_ip
         } else {
@@ -417,12 +430,24 @@ async fn move_keys() -> Result<(), HandlerError> {
 }
 
 async fn get_req(ip: IpAddr, path: &str, chord_node: &ChordNode) -> Result<String, HandlerError> {
-    let resp = reqwest::get(format!("http://{}:{}/{}", ip, PORT, path)).await?;
+    let resp = reqwest::get(format!("http://{}:{}/{}", ip, PORT, path)).await;
+    let resp = match resp {
+        Ok(resp) => resp,
+        Err(e) => {
+            chord_node.handle_failure().await;
+            return Err(e.into());
+        }
+    };
     let text = request_unsuccessful(resp, "GET").await?;
     Ok(text)
 }
 
-async fn patch_req<T, U>(ip: IpAddr, path: &str, data: Vec<(T, U)>, chord_node: &ChordNode) -> Result<(), HandlerError>
+async fn patch_req<T, U>(
+    ip: IpAddr,
+    path: &str,
+    data: Vec<(T, U)>,
+    chord_node: &ChordNode,
+) -> Result<(), HandlerError>
 where
     T: Serialize + Sized,
     U: Serialize + Sized,
@@ -432,7 +457,15 @@ where
         .patch(format!("http://{}:{}/{}", ip, PORT, path))
         .form(&data)
         .send()
-        .await?;
+        .await;
+    let response = match response {
+        Ok(resp) => resp,
+        Err(e) => {
+            chord_node.handle_failure().await;
+            return Err(e.into());
+        }
+    };
+
     request_unsuccessful(response, "PATCH").await?;
     Ok(())
 }
