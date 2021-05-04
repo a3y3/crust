@@ -196,7 +196,7 @@ impl ChordNode {
         let id: u64 = id.parse()?;
         assert!(id < M);
         let pred = self.calculate_predecessor(id).await?;
-        let successor_ip = get_req(pred, HTTP_SUCCESSOR).await?;
+        let successor_ip = get_req(pred, HTTP_SUCCESSOR, self).await?;
         Ok(successor_ip.parse()?)
     }
 
@@ -207,7 +207,7 @@ impl ChordNode {
             let successor = if n_dash == self.self_ip {
                 self.get_successor().to_string()
             } else {
-                get_req(n_dash, HTTP_SUCCESSOR).await?
+                get_req(n_dash, HTTP_SUCCESSOR, self).await?
             };
             let successor_hash = get_identifier(&successor);
             let interval = Interval::new(Bracket::Open, n_dash_id, successor_hash, Bracket::Closed);
@@ -217,7 +217,7 @@ impl ChordNode {
             n_dash = if n_dash == self.self_ip {
                 self.closest_preceding_finger(&id.to_string())
             } else {
-                get_req(n_dash, &format!("{}{}/", HTTP_SUCCESSOR_CPF, id))
+                get_req(n_dash, &format!("{}{}/", HTTP_SUCCESSOR_CPF, id), self)
                     .await?
                     .parse()?
             };
@@ -269,6 +269,7 @@ impl ChordNode {
                 pred,
                 HTTP_FINGER_TABLE,
                 vec![("n", s.to_string()), ("i", i.to_string())],
+                self
             )
             .await?;
         }
@@ -281,7 +282,7 @@ impl ChordNode {
             thread::sleep(Duration::new(STABILIZE_INTERVAL, 0));
             println!("Running stabilize...");
             let succ_ip = self.get_successor();
-            let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR).await?;
+            let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR, self).await?;
             let successors_predecessor_id = get_identifier(&successors_predecessor);
             let self_id = get_identifier(&self.self_ip.to_string());
             let succ_id = get_identifier(&succ_ip.to_string());
@@ -292,7 +293,7 @@ impl ChordNode {
             }
 
             // notify successor about self_ip
-            patch_req(succ_ip, HTTP_NOTIFY, vec![("n", self.self_ip.to_string())]).await?;
+            patch_req(succ_ip, HTTP_NOTIFY, vec![("n", self.self_ip.to_string())], self).await?;
 
             // fix fingers
             self.fix_fingers().await?;
@@ -329,6 +330,10 @@ impl ChordNode {
             rand_entry.successor = succ_id;
         }
         Ok(())
+    }
+
+    async fn handle_failure(&self) {
+        // I REALLY think the return type should be () - let's see how that works out.
     }
 }
 
@@ -385,7 +390,7 @@ async fn init_finger_table(
         let start_plus_one = get_start(self_id, i + 1);
         let interval = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
         let succ_ip = if i == 0 {
-            let succ_ip = get_req(existing_node, &format!("{}{}/", HTTP_SUCCESSOR, start)).await?;
+            let succ_ip = reqwest::get(format!("http://{}:{}/{}", existing_node, PORT, HTTP_SUCCESSOR)).await?.text().await?;
             println!("My successor is {}", succ_ip);
             succ_ip
         } else {
@@ -411,13 +416,13 @@ async fn move_keys() -> Result<(), HandlerError> {
     Ok(())
 }
 
-async fn get_req(ip: IpAddr, path: &str) -> Result<String, HandlerError> {
+async fn get_req(ip: IpAddr, path: &str, chord_node: &ChordNode) -> Result<String, HandlerError> {
     let resp = reqwest::get(format!("http://{}:{}/{}", ip, PORT, path)).await?;
     let text = request_unsuccessful(resp, "GET").await?;
     Ok(text)
 }
 
-async fn patch_req<T, U>(ip: IpAddr, path: &str, data: Vec<(T, U)>) -> Result<(), HandlerError>
+async fn patch_req<T, U>(ip: IpAddr, path: &str, data: Vec<(T, U)>, chord_node: &ChordNode) -> Result<(), HandlerError>
 where
     T: Serialize + Sized,
     U: Serialize + Sized,
