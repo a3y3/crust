@@ -90,7 +90,6 @@ async fn calculate_successor(state: &mut State) -> Result<Response<Body>, Handle
 fn closest_preceding_finger(state: State) -> (State, String) {
     let node = ChordNode::borrow_from(&state);
     let id = &PathExtractor::borrow_from(&state).key;
-    println!("cpf: Finding cpf for {}", id);
     let res = node.closest_preceding_finger(id);
     (state, res.to_string())
 }
@@ -141,7 +140,7 @@ async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError>{
 
     let node = state.borrow::<ChordNode>();
     let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
-    node.notify(n.parse()?);
+    node.notify(n.parse()?).await;
     Ok(response)
 }
 /// add a new key-value pair to the DHT (supplied as POST to /key/)
