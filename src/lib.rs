@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::{env, fmt};
 use std::{thread, time::Duration};
 
-const M: u64 = 16384;
+const M: u64 = 64;
 const PORT: usize = 8000;
 
 const HTTP_SUCCESSOR: &str = "successor/";
@@ -23,7 +23,8 @@ const HTTP_FINGER_TABLE: &str = "fingertable/";
 const HTTP_NOTIFY: &str = "notify/";
 
 const STABILIZE_INTERVAL: u64 = 2;
-
+const LIVENESS_TIMEOUT: u64 = 1;
+const REQ_TIMEOUT: u64 = 3;
 enum Bracket {
     Open,
     Closed,
@@ -100,8 +101,8 @@ impl Serialize for FingerTableEntry {
         let mut state = serializer.serialize_struct("Interval", 4)?;
         state.serialize_field("start", &self.start)?;
         state.serialize_field("interval", &format!("{}", self.interval))?;
-        state.serialize_field("successor", &self.successor)?;
-        state.serialize_field("node_ip", &self.node_ip)?;
+        state.serialize_field("successor_id", &self.successor)?;
+        state.serialize_field("successor", &self.node_ip)?;
 
         state.end()
     }
@@ -124,6 +125,7 @@ pub struct ChordNode {
     hash_map: Arc<Mutex<HashMap<String, String>>>,
     self_ip: IpAddr,
     predecessor: Arc<Mutex<IpAddr>>,
+    successor_list: Arc<Mutex<Vec<IpAddr>>>,
 }
 
 impl Serialize for ChordNode {
@@ -135,6 +137,11 @@ impl Serialize for ChordNode {
         let self_id = get_identifier(&self.self_ip.to_string());
         let predecessor = self.predecessor.lock().unwrap();
         let predecessor_id = get_identifier(&(*predecessor).to_string());
+        let successor_list = self.successor_list.lock().unwrap();
+        let successor_list: Vec<(&IpAddr, u64)> = successor_list
+            .iter()
+            .map(|ip| (ip, get_identifier(&ip.to_string())))
+            .collect();
 
         let mut state = serializer.serialize_struct("Interval", 4)?;
         state.serialize_field("finger_table", &*finger_table)?;
@@ -143,6 +150,7 @@ impl Serialize for ChordNode {
         state.serialize_field("self_id", &self_id)?;
         state.serialize_field("predecessor", &*predecessor)?;
         state.serialize_field("predecessor_id", &predecessor_id)?;
+        state.serialize_field("successor_list", &*successor_list)?;
         state.end()
     }
 }
@@ -157,11 +165,13 @@ impl ChordNode {
         let finger_table = Arc::new(Mutex::new(finger_table));
         let hash_map = Arc::new(Mutex::new(hash_map));
         let predecessor = Arc::new(Mutex::new(predecessor));
+        let successor_list = Arc::new(Mutex::new(Vec::new()));
         Self {
             finger_table,
             hash_map,
             self_ip,
             predecessor,
+            successor_list,
         }
     }
 
@@ -174,14 +184,18 @@ impl ChordNode {
         (*table).get(0).unwrap().node_ip
     }
 
-    pub fn update_successor(&mut self, new_succ: IpAddr) {
+    pub fn update_successor(&self, new_succ: IpAddr) {
         let mut table = self.finger_table.lock().unwrap();
         let prev_entry = table.get_mut(0).unwrap();
+        let old_id = get_identifier(&prev_entry.node_ip.to_string());
         let new_id = get_identifier(&new_succ.to_string());
-        println!("prev succ: {}", prev_entry.node_ip);
+        println!("prev successor: {} (id:{})", prev_entry.node_ip, old_id);
         (*prev_entry).node_ip = new_succ;
         (*prev_entry).successor = new_id;
-        println!("Updated succ to {} (id:{})", prev_entry.node_ip, new_id);
+        println!(
+            "Updated successor to {} (id:{})",
+            prev_entry.node_ip, new_id
+        );
     }
 
     pub fn get_predecessor(&self) -> IpAddr {
@@ -196,7 +210,7 @@ impl ChordNode {
         let id: u64 = id.parse()?;
         assert!(id < M);
         let pred = self.calculate_predecessor(id).await?;
-        let successor_ip = get_req(pred, HTTP_SUCCESSOR).await?;
+        let successor_ip = get_req(pred, HTTP_SUCCESSOR, self).await?;
         Ok(successor_ip.parse()?)
     }
 
@@ -207,7 +221,7 @@ impl ChordNode {
             let successor = if n_dash == self.self_ip {
                 self.get_successor().to_string()
             } else {
-                get_req(n_dash, HTTP_SUCCESSOR).await?
+                get_req(n_dash, HTTP_SUCCESSOR, self).await?
             };
             let successor_hash = get_identifier(&successor);
             let interval = Interval::new(Bracket::Open, n_dash_id, successor_hash, Bracket::Closed);
@@ -217,7 +231,7 @@ impl ChordNode {
             n_dash = if n_dash == self.self_ip {
                 self.closest_preceding_finger(&id.to_string())
             } else {
-                get_req(n_dash, &format!("{}{}/", HTTP_SUCCESSOR_CPF, id))
+                get_req(n_dash, &format!("{}{}/", HTTP_SUCCESSOR_CPF, id), self)
                     .await?
                     .parse()?
             };
@@ -269,6 +283,7 @@ impl ChordNode {
                 pred,
                 HTTP_FINGER_TABLE,
                 vec![("n", s.to_string()), ("i", i.to_string())],
+                self,
             )
             .await?;
         }
@@ -276,36 +291,60 @@ impl ChordNode {
         Ok(())
     }
 
-    async fn stabilize(&mut self) -> Result<(), HandlerError> {
+    async fn stabilize(&self) -> Result<(), HandlerError> {
+        let client = reqwest::Client::new();
         loop {
-            thread::sleep(Duration::new(STABILIZE_INTERVAL, 0));
-            println!("Running stabilize...");
+            thread::sleep(Duration::from_secs(STABILIZE_INTERVAL));
             let succ_ip = self.get_successor();
-            let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR).await?;
+            let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR, self).await?;
+            if !is_node_alive(successors_predecessor.parse()?, Some(&client)).await {
+                continue;
+            }
             let successors_predecessor_id = get_identifier(&successors_predecessor);
             let self_id = get_identifier(&self.self_ip.to_string());
             let succ_id = get_identifier(&succ_ip.to_string());
             let int_self_to_successor =
                 Interval::new(Bracket::Open, self_id, succ_id, Bracket::Open);
             if int_self_to_successor.contains(successors_predecessor_id) {
+                println!("stabilize() found a new successor, updating...");
                 self.update_successor(successors_predecessor.parse()?);
             }
 
-            // notify successor about self_ip
-            patch_req(succ_ip, HTTP_NOTIFY, vec![("n", self.self_ip.to_string())]).await?;
+            // notify successor that this node should be their predecessor
+            patch_req(
+                succ_ip,
+                HTTP_NOTIFY,
+                vec![("n", self.self_ip.to_string())],
+                self,
+            )
+            .await?;
 
             // fix fingers
             self.fix_fingers().await?;
+
+            // rebuild successor list
+            self.build_successor_list().await?;
         }
     }
 
-    pub fn notify(&self, other_node: IpAddr) {
+    pub async fn notify(&self, other_node: IpAddr) {
         let predecessor = self.get_predecessor();
         let pred_id = get_identifier(&predecessor.to_string());
         let other_id = get_identifier(&other_node.to_string());
         let self_id = get_identifier(&self.self_ip.to_string());
         let int_predecessor_to_self = Interval::new(Bracket::Open, pred_id, self_id, Bracket::Open);
-        if (predecessor == self.self_ip) || (int_predecessor_to_self.contains(other_id)) {
+        let is_predecessor_alive = is_node_alive(predecessor, None).await;
+        if !is_predecessor_alive
+            || (predecessor == self.self_ip)
+            || (int_predecessor_to_self.contains(other_id))
+        {
+            if other_node != predecessor {
+                println!(
+                    "notify found a better predecessor. Updating to {} (id:{})",
+                    other_node,
+                    get_identifier(&other_node.to_string())
+                );
+            }
             self.update_predecessor(other_node);
         }
     }
@@ -329,6 +368,104 @@ impl ChordNode {
             rand_entry.successor = succ_id;
         }
         Ok(())
+    }
+
+    async fn build_successor_list(&self) -> Result<(), HandlerError> {
+        let m = (M as f64).log2() as u32;
+        let client = reqwest::Client::new();
+        let mut successor = self.get_successor();
+        let mut new_successors = Vec::new();
+        for _ in 0..m {
+            let next_successor = client
+                .get(format!("http://{}:{}/{}", successor, PORT, HTTP_SUCCESSOR))
+                .timeout(Duration::from_secs(REQ_TIMEOUT))
+                .send()
+                .await;
+            match next_successor {
+                Ok(s) => successor = s.text().await?.parse()?,
+                //if a potential successor is down, skip adding it to the list.
+                Err(_) => break,
+            };
+            new_successors.push(successor);
+        }
+        *self.successor_list.lock().unwrap() = new_successors;
+        Ok(())
+    }
+
+    async fn handle_failure(&self) {
+        // check if successor is alive
+        println!("Failure detected, attempting to fix pointers...");
+        let client = reqwest::Client::new();
+        let successor_ip = self.get_successor();
+        let resp = client
+            .get(format!(
+                "http://{}:{}/{}",
+                successor_ip, PORT, HTTP_SUCCESSOR
+            ))
+            .timeout(Duration::from_secs(REQ_TIMEOUT))
+            .send()
+            .await;
+        match resp {
+            Ok(_) => {}
+            Err(_) => {
+                println!("Successor is down. Fixing...");
+                let new_succ = self.get_first_live_successor(&client).await;
+                self.update_successor(new_succ);
+                println!(
+                    "Notifying my new successor (id:{}) to update their predecessor...",
+                    get_identifier(&new_succ.to_string())
+                );
+                client
+                    .patch(format!("http://{}:{}/{}", new_succ, PORT, HTTP_NOTIFY))
+                    .timeout(Duration::from_secs(REQ_TIMEOUT))
+                    .form(&vec![("n", self.self_ip.to_string())])
+                    .send()
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // check if predecessor is alive
+        let predecessor_ip = self.get_predecessor();
+        let resp = client
+            .get(format!(
+                "http://{}:{}/{}",
+                predecessor_ip, PORT, HTTP_SUCCESSOR
+            ))
+            .timeout(Duration::from_secs(REQ_TIMEOUT))
+            .send()
+            .await;
+        match resp {
+            Ok(_) => {}
+            Err(_) => {
+                println!("Predecessor is down. Fixing to self IP.");
+                self.update_predecessor(self.self_ip)
+            }
+        }
+    }
+
+    async fn get_first_live_successor(&self, client: &reqwest::Client) -> IpAddr {
+        let entries: Vec<IpAddr> = {
+            let table = self.successor_list.lock().unwrap();
+            table.iter().map(|ip| *ip).collect()
+        };
+
+        for possible_succ in entries {
+            println!("Trying to contact {}", possible_succ);
+            let resp = client
+                .get(format!(
+                    "http://{}:{}/{}",
+                    possible_succ, PORT, HTTP_SUCCESSOR
+                ))
+                .timeout(Duration::from_secs(REQ_TIMEOUT))
+                .send()
+                .await;
+            match resp {
+                Ok(_) => return possible_succ,
+                Err(_) => continue,
+            }
+        }
+        return self.self_ip;
     }
 }
 
@@ -385,7 +522,13 @@ async fn init_finger_table(
         let start_plus_one = get_start(self_id, i + 1);
         let interval = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
         let succ_ip = if i == 0 {
-            let succ_ip = get_req(existing_node, &format!("{}{}/", HTTP_SUCCESSOR, start)).await?;
+            let succ_ip = reqwest::get(format!(
+                "http://{}:{}/{}",
+                existing_node, PORT, HTTP_SUCCESSOR
+            ))
+            .await?
+            .text()
+            .await?;
             println!("My successor is {}", succ_ip);
             succ_ip
         } else {
@@ -397,7 +540,7 @@ async fn init_finger_table(
     }
 
     let predecessor = self_ip;
-    println!("Setting my predecessor as me. This will be fixed later by stabilize()");
+    println!("Setting my predecessor as me. This will be fixed later by notify()");
 
     Ok(ChordNode::new(
         finger_table,
@@ -411,13 +554,30 @@ async fn move_keys() -> Result<(), HandlerError> {
     Ok(())
 }
 
-async fn get_req(ip: IpAddr, path: &str) -> Result<String, HandlerError> {
-    let resp = reqwest::get(format!("http://{}:{}/{}", ip, PORT, path)).await?;
+async fn get_req(ip: IpAddr, path: &str, chord_node: &ChordNode) -> Result<String, HandlerError> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{}:{}/{}", ip, PORT, path))
+        .timeout(Duration::from_secs(REQ_TIMEOUT))
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(resp) => resp,
+        Err(e) => {
+            chord_node.handle_failure().await;
+            return Err(e.into());
+        }
+    };
     let text = request_unsuccessful(resp, "GET").await?;
-    Ok(text)
+    return Ok(text);
 }
 
-async fn patch_req<T, U>(ip: IpAddr, path: &str, data: Vec<(T, U)>) -> Result<(), HandlerError>
+async fn patch_req<T, U>(
+    ip: IpAddr,
+    path: &str,
+    data: Vec<(T, U)>,
+    chord_node: &ChordNode,
+) -> Result<(), HandlerError>
 where
     T: Serialize + Sized,
     U: Serialize + Sized,
@@ -425,9 +585,18 @@ where
     let client = reqwest::Client::new();
     let response = client
         .patch(format!("http://{}:{}/{}", ip, PORT, path))
+        .timeout(Duration::from_secs(REQ_TIMEOUT))
         .form(&data)
         .send()
-        .await?;
+        .await;
+    let response = match response {
+        Ok(resp) => resp,
+        Err(e) => {
+            chord_node.handle_failure().await;
+            return Err(e.into());
+        }
+    };
+
     request_unsuccessful(response, "PATCH").await?;
     Ok(())
 }
@@ -446,13 +615,40 @@ async fn request_unsuccessful(response: Response, req_type: &str) -> Result<Stri
     Ok(response.text().await?)
 }
 
-pub fn start_stabilize_thread(mut chord_node: ChordNode) {
+async fn is_node_alive(ip: IpAddr, client: Option<&reqwest::Client>) -> bool {
+    let client = match client {
+        Some(client) => client.clone(),
+        None => reqwest::Client::new(),
+    };
+
+    let response = client
+        .get(format!("http://{}:{}/{}", ip, PORT, HTTP_SUCCESSOR))
+        .timeout(Duration::from_secs(LIVENESS_TIMEOUT))
+        .send()
+        .await;
+    match response {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+pub fn start_stabilize_thread(chord_node: ChordNode) {
     thread::spawn(move || {
         tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(chord_node.stabilize())
-            .unwrap();
+            .block_on(err_stabilize(chord_node));
     });
+}
+
+async fn err_stabilize(chord_node: ChordNode) {
+    loop {
+        match chord_node.stabilize().await {
+            Ok(()) => {}
+            Err(_e) => {
+                println!("Warning: Retrying stabilize() to see if the issue was fixed automatically (there's a good chance it was). If you see this warning more than 5-6 times in a row, exit the program and debug.")
+            }
+        }
+    }
 }
 
 fn get_self_ip() -> IpAddr {
