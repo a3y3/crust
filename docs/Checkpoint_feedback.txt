@@ -1,0 +1,17 @@
+
+Good checkpoint writeup and presentation.
+
+Looks to be solid progress.  Seems that you did some good investigatio of the
+ecosystem and found some good external crates to build upon.  Happy to see that
+using a simple HTTP server for the communication is working out and that you
+discovered some pros and cons for different web frameworks.  Also, nice to use
+docker to simulate a number of different nodes, and dockertest seems to be a
+nice way of integrating it with Rust.
+
+Do be sure that you are putting sufficient time and effort into understanding
+Chord and implementing the actual protocol.  As mentioned, there will probably
+need to be some mechanism for nodes to join the DHT and for the DHT to recognize
+that nodes have left.
+
+
+Score: 10/10
