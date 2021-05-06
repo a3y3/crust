@@ -1,22 +1,23 @@
 use gotham::handler::HandlerError;
 use gotham_derive::StateData;
+use reqwest::Response;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use serde_derive::Serialize;
 use serde_json;
+use simple_error::SimpleError;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::env;
-use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
+use std::{env, fmt};
 
-const M: u64 = 64;
+const M: u64 = 16384;
 const PORT: usize = 8000;
 
 const HTTP_SUCCESSOR: &str = "successor/";
-const HTTP_SUCCESSOR_CFP: &str = "successor/cfp/";
+const HTTP_SUCCESSOR_CPF: &str = "successor/cpf/";
 const HTTP_PREDECESSOR: &str = "predecessor/";
+const HTTP_FINGER_TABLE: &str = "fingertable/";
 
 enum Bracket {
     Open,
@@ -58,14 +59,15 @@ impl Interval {
         }
     }
 
-    /// Needs improvement - right now this method uses a pretty inefficient way to check if a `val` lies between an `Interval. Selecting a `start` and and `end` and walking through each value between them isn't ideal, and we need  a faster way to do this.
+    /// todo Needs improvement - right now this method uses a pretty inefficient way to check if a `val` lies between an `Interval. Selecting a `start` and and `end` and walking through each value between them isn't ideal, and we need  a faster way to do this.
     fn contains(&self, val: u64) -> bool {
         let mut start = match self.bracket1 {
             Bracket::Open => (self.val1 + 1) % M,
             Bracket::Closed => self.val1,
         };
+
         let end = match self.bracket2 {
-            Bracket::Open => (self.val2 - 1) % M,
+            Bracket::Open => (self.val2 + M - 1) % M,
             Bracket::Closed => self.val2,
         };
 
@@ -73,13 +75,11 @@ impl Interval {
             if start == val {
                 return true;
             }
-            start += 1;
+            start = (start + 1) % M;
         }
         val == start
     }
 }
-
-#[allow(dead_code)] //todo remove this later
 struct FingerTableEntry {
     start: u64,
     interval: Interval,
@@ -113,26 +113,9 @@ impl FingerTableEntry {
     }
 }
 
-#[derive(Serialize)]
-struct FingerTable {
-    fingers: Vec<FingerTableEntry>,
-}
-
-impl FingerTable {
-    fn new() -> Self {
-        FingerTable {
-            fingers: Vec::new(),
-        }
-    }
-
-    fn add_entry(&mut self, entry: FingerTableEntry) {
-        self.fingers.push(entry);
-    }
-}
-
 #[derive(Clone, StateData)]
 pub struct ChordNode {
-    finger_table: Arc<Mutex<FingerTable>>,
+    finger_table: Arc<Mutex<Vec<FingerTableEntry>>>,
     hash_map: Arc<Mutex<HashMap<String, String>>>,
     self_ip: IpAddr,
     predecessor: Arc<Mutex<IpAddr>>,
@@ -161,7 +144,7 @@ impl Serialize for ChordNode {
 
 impl ChordNode {
     fn new(
-        finger_table: FingerTable,
+        finger_table: Vec<FingerTableEntry>,
         hash_map: HashMap<String, String>,
         self_ip: IpAddr,
         predecessor: IpAddr,
@@ -183,12 +166,12 @@ impl ChordNode {
 
     pub fn get_successor(&self) -> IpAddr {
         let table = self.finger_table.lock().unwrap();
-        (*table).fingers.get(0).unwrap().node_ip
+        (*table).get(0).unwrap().node_ip
     }
 
     pub fn update_successor(&mut self, new_succ: IpAddr) {
         let mut table = self.finger_table.lock().unwrap();
-        let prev_entry = table.fingers.get_mut(0).unwrap();
+        let prev_entry = table.get_mut(0).unwrap();
         let new_id = get_identifier(&new_succ.to_string());
         println!("prev succ: {}", prev_entry.node_ip);
         (*prev_entry).node_ip = new_succ;
@@ -207,24 +190,32 @@ impl ChordNode {
     pub async fn calculate_successor(&self, id: &String) -> Result<IpAddr, HandlerError> {
         let id: u64 = id.parse()?;
         assert!(id < M);
-        let pred = self.find_predecessor(id).await?;
+        let pred = self.calculate_predecessor(id).await?;
         let successor_ip = get_req(pred, HTTP_SUCCESSOR).await?;
         Ok(successor_ip.parse()?)
     }
 
-    async fn find_predecessor(&self, id: u64) -> Result<IpAddr, HandlerError> {
+    async fn calculate_predecessor(&self, id: u64) -> Result<IpAddr, HandlerError> {
         let mut n_dash = self.self_ip;
         loop {
             let n_dash_id = get_identifier(&n_dash.to_string());
-            let successor = get_req(n_dash, HTTP_SUCCESSOR).await?;
+            let successor = if n_dash == self.self_ip {
+                self.get_successor().to_string()
+            } else {
+                get_req(n_dash, HTTP_SUCCESSOR).await?
+            };
             let successor_hash = get_identifier(&successor);
             let interval = Interval::new(Bracket::Open, n_dash_id, successor_hash, Bracket::Closed);
             if interval.contains(id) {
                 break;
             }
-            n_dash = get_req(n_dash, &format!("{}{}/", HTTP_SUCCESSOR_CFP, id))
-                .await?
-                .parse()?;
+            n_dash = if n_dash == self.self_ip {
+                self.closest_preceding_finger(&id.to_string())
+            } else {
+                get_req(n_dash, &format!("{}{}/", HTTP_SUCCESSOR_CPF, id))
+                    .await?
+                    .parse()?
+            };
         }
 
         Ok(n_dash)
@@ -239,13 +230,45 @@ impl ChordNode {
             id,
             Bracket::Open,
         );
-        for entry in self.finger_table.lock().unwrap().fingers.iter().rev() {
-            println!("Checking if {} is in {}", entry.successor, interval);
+        for entry in self.finger_table.lock().unwrap().iter().rev() {
             if interval.contains(entry.successor) {
                 return entry.node_ip;
             }
         }
         return self.self_ip;
+    }
+
+    pub async fn update_finger_table(&mut self, s: IpAddr, i: u64) -> Result<(), HandlerError> {
+        let self_id = get_identifier(&self.self_ip.to_string());
+        let s_id = get_identifier(&s.to_string());
+        let ith_ip_id = {
+            let locked_table = self.finger_table.lock().unwrap();
+            (*locked_table).get(i as usize).unwrap().successor.clone()
+        };
+        let interval = Interval::new(Bracket::Closed, self_id, ith_ip_id, Bracket::Open);
+        if interval.contains(s_id) {
+            {
+                let mut lock = self.finger_table.lock().unwrap();
+                let entry = lock.get_mut(i as usize).unwrap();
+                entry.successor = s_id;
+                entry.node_ip = s;
+            }
+            let pred = *self.predecessor.lock().unwrap();
+            let pred_id = get_identifier(&pred.to_string());
+            if pred_id == s_id {
+                println!("Warning: Skipping patching my predecessor because it's the same as s_id! See the README for what this warning means.");
+                return Ok(());
+            }
+            println!("Done. Patching my predecessor ({})", pred_id);
+            patch_req(
+                pred,
+                HTTP_FINGER_TABLE,
+                vec![("n", s.to_string()), ("i", i.to_string())],
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -256,18 +279,24 @@ pub fn initialize_node() -> ChordNode {
     println!("My ip is {} and my ID is {}", self_ip, self_id);
     if args.len() == 1 {
         // first node
-        let mut finger_table = FingerTable::new();
+        let mut finger_table = Vec::new();
         let hash_map = HashMap::new();
-        let start = get_start(self_id, 0);
-        let k_plus_one_start = get_start(self_id, 1);
-        let interval = Interval::new(Bracket::Closed, start, k_plus_one_start, Bracket::Open);
-        let first_entry = FingerTableEntry::new(start, interval, self_id, self_ip);
-        finger_table.add_entry(first_entry);
+        let m = (M as f64).log2() as u32;
+        for i in 0..m {
+            let start = get_start(self_id, i);
+            let k_plus_one_start = get_start(self_id, i + 1);
+            let interval = Interval::new(Bracket::Closed, start, k_plus_one_start, Bracket::Open);
+            let first_entry = FingerTableEntry::new(start, interval, self_id, self_ip);
+            finger_table.push(first_entry);
+        }
 
         return ChordNode::new(finger_table, hash_map, self_ip, self_ip);
     } else {
-        println!("Initializing node...");
-        join(self_ip, args[1].parse().unwrap())
+        let node = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(partial_join(self_ip, args[1].parse().unwrap()))
+            .unwrap();
+        node
     }
 }
 
@@ -275,12 +304,16 @@ fn get_start(n: u64, k: u32) -> u64 {
     (n + u64::pow(2, k)) % M
 }
 
-fn join(self_ip: IpAddr, existing_node: IpAddr) -> ChordNode {
-    let node = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(init_finger_table(self_ip, existing_node))
-        .unwrap();
-    node
+async fn partial_join(self_ip: IpAddr, existing_node: IpAddr) -> Result<ChordNode, HandlerError> {
+    println!("Initializing my finger tables...");
+    let node = init_finger_table(self_ip, existing_node).await?;
+    println!("Done.");
+    println!("Updating others' finger tables...");
+    update_others(node.self_ip, &node).await?;
+    println!("Done.");
+    println!("Skipping moving keys...");
+    move_keys().await?;
+    Ok(node)
 }
 
 async fn init_finger_table(
@@ -299,14 +332,35 @@ async fn init_finger_table(
         get_identifier(&successor),
         successor.parse()?,
     );
-    let mut finger_table = FingerTable::new();
-    finger_table.add_entry(first_entry);
+    let mut finger_table = Vec::new();
+    finger_table.push(first_entry);
     let predecessor = get_req(successor.parse()?, HTTP_PREDECESSOR).await?;
     println!("My predecessor is {}", predecessor);
     patch_req(successor.parse()?, HTTP_PREDECESSOR, vec![("ip", self_ip)]).await?;
     println!("Patched my successor so that its predecessor is me");
     patch_req(predecessor.parse()?, HTTP_SUCCESSOR, vec![("ip", self_ip)]).await?;
     println!("Patched my predecesssor so that its successor is me");
+    let m = (M as f64).log2() as u32;
+    for i in 0..m - 1 {
+        let start = get_start(self_id, i + 1);
+        let start_plus_one = get_start(self_id, i + 2);
+        let interval_table = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
+        let prev_entry = finger_table.get(i as usize).unwrap();
+        let interval_check = Interval::new(
+            Bracket::Closed,
+            self_id,
+            prev_entry.successor,
+            Bracket::Open,
+        );
+        let (succ_ip, succ_id) = if interval_check.contains(start) {
+            (prev_entry.node_ip, prev_entry.successor)
+        } else {
+            let ip = get_req(existing_node, &format!("{}{}", HTTP_SUCCESSOR, start)).await?;
+            (ip.parse()?, get_identifier(&ip))
+        };
+        let entry = FingerTableEntry::new(start, interval_table, succ_id, succ_ip);
+        finger_table.push(entry);
+    }
 
     Ok(ChordNode::new(
         finger_table,
@@ -316,9 +370,35 @@ async fn init_finger_table(
     ))
 }
 
+async fn update_others(self_ip: IpAddr, node: &ChordNode) -> Result<(), HandlerError> {
+    let m = (M as f64).log2() as u32;
+    for i in 0..m {
+        let self_id = get_identifier(&self_ip.to_string());
+        let prev_id = (self_id + M - u64::pow(2, i)) % M;
+        let p = node.calculate_predecessor(prev_id).await?;
+        if get_identifier(&p.to_string()) == self_id {
+            println!("Warning: Skipping patching my predecessor because it's the same as s_id! See the README for what this warning means.");
+            continue;
+        }
+        println!("Updating predecessor {}'s finger table...", p);
+        patch_req(
+            p,
+            HTTP_FINGER_TABLE,
+            vec![("n", self_ip.to_string()), ("i", i.to_string())],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn move_keys() -> Result<(), HandlerError> {
+    Ok(())
+}
+
 async fn get_req(ip: IpAddr, path: &str) -> Result<String, HandlerError> {
     let resp = reqwest::get(format!("http://{}:{}/{}", ip, PORT, path)).await?;
-    Ok(resp.text().await?)
+    let text = request_unsuccessful(resp, "GET").await?;
+    Ok(text)
 }
 
 async fn patch_req<T, U>(ip: IpAddr, path: &str, data: Vec<(T, U)>) -> Result<(), HandlerError>
@@ -327,12 +407,27 @@ where
     U: Serialize + Sized,
 {
     let client = reqwest::Client::new();
-    client
+    let response = client
         .patch(format!("http://{}:{}/{}", ip, PORT, path))
         .form(&data)
         .send()
         .await?;
+    request_unsuccessful(response, "PATCH").await?;
     Ok(())
+}
+
+async fn request_unsuccessful(response: Response, req_type: &str) -> Result<String, HandlerError> {
+    let status = response.status();
+    if status != 200 {
+        let error = SimpleError::new(format!(
+            "Received error from {} req: {}",
+            req_type,
+            response.text().await?
+        ));
+        let handler_error = HandlerError::from(error).with_status(status);
+        return Err(handler_error);
+    }
+    Ok(response.text().await?)
 }
 
 fn get_self_ip() -> IpAddr {
