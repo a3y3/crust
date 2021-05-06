@@ -23,7 +23,8 @@ const HTTP_FINGER_TABLE: &str = "fingertable/";
 const HTTP_NOTIFY: &str = "notify/";
 
 const STABILIZE_INTERVAL: u64 = 2;
-const REQ_TIMEOUT: u64 = 2;
+const LIVENESS_TIMEOUT: u64 = 1;
+const REQ_TIMEOUT: u64 = 3;
 enum Bracket {
     Open,
     Closed,
@@ -296,26 +297,27 @@ impl ChordNode {
             thread::sleep(Duration::from_secs(STABILIZE_INTERVAL));
             let succ_ip = self.get_successor();
             let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR, self).await?;
-            if is_node_alive(successors_predecessor.parse()?, Some(&client)).await {
-                let successors_predecessor_id = get_identifier(&successors_predecessor);
-                let self_id = get_identifier(&self.self_ip.to_string());
-                let succ_id = get_identifier(&succ_ip.to_string());
-                let int_self_to_successor =
-                    Interval::new(Bracket::Open, self_id, succ_id, Bracket::Open);
-                if int_self_to_successor.contains(successors_predecessor_id) {
-                    println!("stabilize() found a new successor, updating...");
-                    self.update_successor(successors_predecessor.parse()?);
-                }
-
-                // notify successor that this node should be their predecessor
-                patch_req(
-                    succ_ip,
-                    HTTP_NOTIFY,
-                    vec![("n", self.self_ip.to_string())],
-                    self,
-                )
-                .await?;
+            if !is_node_alive(successors_predecessor.parse()?, Some(&client)).await {
+                continue;
             }
+            let successors_predecessor_id = get_identifier(&successors_predecessor);
+            let self_id = get_identifier(&self.self_ip.to_string());
+            let succ_id = get_identifier(&succ_ip.to_string());
+            let int_self_to_successor =
+                Interval::new(Bracket::Open, self_id, succ_id, Bracket::Open);
+            if int_self_to_successor.contains(successors_predecessor_id) {
+                println!("stabilize() found a new successor, updating...");
+                self.update_successor(successors_predecessor.parse()?);
+            }
+
+            // notify successor that this node should be their predecessor
+            patch_req(
+                succ_ip,
+                HTTP_NOTIFY,
+                vec![("n", self.self_ip.to_string())],
+                self,
+            )
+            .await?;
 
             // fix fingers
             self.fix_fingers().await?;
@@ -621,7 +623,7 @@ async fn is_node_alive(ip: IpAddr, client: Option<&reqwest::Client>) -> bool {
 
     let response = client
         .get(format!("http://{}:{}/{}", ip, PORT, HTTP_SUCCESSOR))
-        .timeout(Duration::from_secs(REQ_TIMEOUT))
+        .timeout(Duration::from_secs(LIVENESS_TIMEOUT))
         .send()
         .await;
     match response {
@@ -642,10 +644,9 @@ async fn err_stabilize(chord_node: ChordNode) {
     loop {
         match chord_node.stabilize().await {
             Ok(()) => {}
-            Err(e) => eprintln!(
-                "Got error during stabilize, which should be fixed automatically: {:?}",
-                e
-            ),
+            Err(_e) => {
+                println!("Warning: Retrying stabilize() to see if the issue was fixed automatically (there's a good chance it was). If you see this warning more than 5-6 times in a row, exit the program and debug.")
+            }
         }
     }
 }
