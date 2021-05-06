@@ -101,8 +101,8 @@ impl Serialize for FingerTableEntry {
         let mut state = serializer.serialize_struct("Interval", 4)?;
         state.serialize_field("start", &self.start)?;
         state.serialize_field("interval", &format!("{}", self.interval))?;
-        state.serialize_field("successor", &self.successor)?;
-        state.serialize_field("node_ip", &self.node_ip)?;
+        state.serialize_field("successor_id", &self.successor)?;
+        state.serialize_field("successor", &self.node_ip)?;
 
         state.end()
     }
