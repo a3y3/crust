@@ -4,9 +4,7 @@ Crust is an implementation of [Chord](https://en.wikipedia.org/wiki/Chord_(peer-
 This is a WIP. Click [here](https://github.com/a3y3/crust/projects/1) to see what we're working on currently (or what's next)
 
 ## What works as of now
-There's no "hash map" functionality - but we have the basic version of Chord up and running that has successor and predecessor pointers, and finger tables. 
-
-We are working on handling failures next.
+There's no "hash map" functionality - but we have the actual protocol, Chord, up and running that has successor and predecessor pointers, and finger tables (and can correctly adjust these pointers when nodes fail). 
 
 ## Build
 `docker build . -t crust`
