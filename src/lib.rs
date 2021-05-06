@@ -1,5 +1,6 @@
 use gotham::handler::HandlerError;
 use gotham_derive::StateData;
+use rand::Rng;
 use reqwest::Response;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json;
@@ -10,6 +11,7 @@ use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::{env, fmt};
+use std::{thread, time::Duration};
 
 const M: u64 = 16384;
 const PORT: usize = 8000;
@@ -18,6 +20,9 @@ const HTTP_SUCCESSOR: &str = "successor/";
 const HTTP_SUCCESSOR_CPF: &str = "successor/cpf/";
 const HTTP_PREDECESSOR: &str = "predecessor/";
 const HTTP_FINGER_TABLE: &str = "fingertable/";
+const HTTP_NOTIFY: &str = "notify/";
+
+const STABILIZE_INTERVAL: u64 = 2;
 
 enum Bracket {
     Open,
@@ -183,7 +188,7 @@ impl ChordNode {
         *self.predecessor.lock().unwrap()
     }
 
-    pub fn update_predecessor(&mut self, ip: IpAddr) {
+    pub fn update_predecessor(&self, ip: IpAddr) {
         *self.predecessor.lock().unwrap() = ip
     }
 
@@ -270,6 +275,61 @@ impl ChordNode {
 
         Ok(())
     }
+
+    async fn stabilize(&mut self) -> Result<(), HandlerError> {
+        loop {
+            thread::sleep(Duration::new(STABILIZE_INTERVAL, 0));
+            println!("Running stabilize...");
+            let succ_ip = self.get_successor();
+            let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR).await?;
+            let successors_predecessor_id = get_identifier(&successors_predecessor);
+            let self_id = get_identifier(&self.self_ip.to_string());
+            let succ_id = get_identifier(&succ_ip.to_string());
+            let int_self_to_successor =
+                Interval::new(Bracket::Open, self_id, succ_id, Bracket::Open);
+            if int_self_to_successor.contains(successors_predecessor_id) {
+                self.update_successor(successors_predecessor.parse()?);
+            }
+
+            // notify successor about self_ip
+            patch_req(succ_ip, HTTP_NOTIFY, vec![("n", self.self_ip.to_string())]).await?;
+
+            // fix fingers
+            self.fix_fingers().await?;
+        }
+    }
+
+    pub fn notify(&self, other_node: IpAddr) {
+        let predecessor = self.get_predecessor();
+        let pred_id = get_identifier(&predecessor.to_string());
+        let other_id = get_identifier(&other_node.to_string());
+        let self_id = get_identifier(&self.self_ip.to_string());
+        let int_predecessor_to_self = Interval::new(Bracket::Open, pred_id, self_id, Bracket::Open);
+        if (predecessor == self.self_ip) || (int_predecessor_to_self.contains(other_id)) {
+            self.update_predecessor(other_node);
+        }
+    }
+
+    async fn fix_fingers(&self) -> Result<(), HandlerError> {
+        let m = (M as f64).log2() as u32;
+        let rand_idx = rand::thread_rng().gen_range(0..m) as usize;
+
+        let start = {
+            let table = self.finger_table.lock().unwrap();
+            let rand_entry = table.get(rand_idx).unwrap();
+            rand_entry.start
+        };
+
+        let succ = self.calculate_successor(&start.to_string()).await?;
+        let succ_id = get_identifier(&succ.to_string());
+        {
+            let mut table = self.finger_table.lock().unwrap();
+            let rand_entry = table.get_mut(rand_idx).unwrap();
+            rand_entry.node_ip = succ;
+            rand_entry.successor = succ_id;
+        }
+        Ok(())
+    }
 }
 
 pub fn initialize_node() -> ChordNode {
@@ -294,7 +354,7 @@ pub fn initialize_node() -> ChordNode {
     } else {
         let node = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(partial_join(self_ip, args[1].parse().unwrap()))
+            .block_on(join(self_ip, args[1].parse().unwrap()))
             .unwrap();
         node
     }
@@ -304,12 +364,9 @@ fn get_start(n: u64, k: u32) -> u64 {
     (n + u64::pow(2, k)) % M
 }
 
-async fn partial_join(self_ip: IpAddr, existing_node: IpAddr) -> Result<ChordNode, HandlerError> {
+async fn join(self_ip: IpAddr, existing_node: IpAddr) -> Result<ChordNode, HandlerError> {
     println!("Initializing my finger tables...");
     let node = init_finger_table(self_ip, existing_node).await?;
-    println!("Done.");
-    println!("Updating others' finger tables...");
-    update_others(node.self_ip, &node).await?;
     println!("Done.");
     println!("Skipping moving keys...");
     move_keys().await?;
@@ -321,74 +378,33 @@ async fn init_finger_table(
     existing_node: IpAddr,
 ) -> Result<ChordNode, HandlerError> {
     let self_id = get_identifier(&self_ip.to_string());
-    let start = get_start(self_id, 0);
-    let start_plus_one = get_start(self_id, 1);
-    let interval = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
-    let successor = get_req(existing_node, &format!("{}{}/", HTTP_SUCCESSOR, start)).await?;
-    println!("My successor is {}", successor);
-    let first_entry = FingerTableEntry::new(
-        start,
-        interval,
-        get_identifier(&successor),
-        successor.parse()?,
-    );
-    let mut finger_table = Vec::new();
-    finger_table.push(first_entry);
-    let predecessor = get_req(successor.parse()?, HTTP_PREDECESSOR).await?;
-    println!("My predecessor is {}", predecessor);
-    patch_req(successor.parse()?, HTTP_PREDECESSOR, vec![("ip", self_ip)]).await?;
-    println!("Patched my successor so that its predecessor is me");
-    patch_req(predecessor.parse()?, HTTP_SUCCESSOR, vec![("ip", self_ip)]).await?;
-    println!("Patched my predecesssor so that its successor is me");
     let m = (M as f64).log2() as u32;
-    for i in 0..m - 1 {
-        let start = get_start(self_id, i + 1);
-        let start_plus_one = get_start(self_id, i + 2);
-        let interval_table = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
-        let prev_entry = finger_table.get(i as usize).unwrap();
-        let interval_check = Interval::new(
-            Bracket::Closed,
-            self_id,
-            prev_entry.successor,
-            Bracket::Open,
-        );
-        let (succ_ip, succ_id) = if interval_check.contains(start) {
-            (prev_entry.node_ip, prev_entry.successor)
+    let mut finger_table = Vec::new();
+    for i in 0..m {
+        let start = get_start(self_id, i);
+        let start_plus_one = get_start(self_id, i + 1);
+        let interval = Interval::new(Bracket::Closed, start, start_plus_one, Bracket::Open);
+        let succ_ip = if i == 0 {
+            let succ_ip = get_req(existing_node, &format!("{}{}/", HTTP_SUCCESSOR, start)).await?;
+            println!("My successor is {}", succ_ip);
+            succ_ip
         } else {
-            let ip = get_req(existing_node, &format!("{}{}", HTTP_SUCCESSOR, start)).await?;
-            (ip.parse()?, get_identifier(&ip))
+            self_ip.to_string()
         };
-        let entry = FingerTableEntry::new(start, interval_table, succ_id, succ_ip);
+        let succ_id = get_identifier(&succ_ip.to_string());
+        let entry = FingerTableEntry::new(start, interval, succ_id, succ_ip.parse()?);
         finger_table.push(entry);
     }
+
+    let predecessor = self_ip;
+    println!("Setting my predecessor as me. This will be fixed later by stabilize()");
 
     Ok(ChordNode::new(
         finger_table,
         HashMap::new(),
         self_ip,
-        predecessor.parse()?,
+        predecessor,
     ))
-}
-
-async fn update_others(self_ip: IpAddr, node: &ChordNode) -> Result<(), HandlerError> {
-    let m = (M as f64).log2() as u32;
-    for i in 0..m {
-        let self_id = get_identifier(&self_ip.to_string());
-        let prev_id = (self_id + M - u64::pow(2, i)) % M;
-        let p = node.calculate_predecessor(prev_id).await?;
-        if get_identifier(&p.to_string()) == self_id {
-            println!("Warning: Skipping patching my predecessor because it's the same as s_id! See the README for what this warning means.");
-            continue;
-        }
-        println!("Updating predecessor {}'s finger table...", p);
-        patch_req(
-            p,
-            HTTP_FINGER_TABLE,
-            vec![("n", self_ip.to_string()), ("i", i.to_string())],
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 async fn move_keys() -> Result<(), HandlerError> {
@@ -428,6 +444,15 @@ async fn request_unsuccessful(response: Response, req_type: &str) -> Result<Stri
         return Err(handler_error);
     }
     Ok(response.text().await?)
+}
+
+pub fn start_stabilize_thread(mut chord_node: ChordNode) {
+    thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(chord_node.stabilize())
+            .unwrap();
+    });
 }
 
 fn get_self_ip() -> IpAddr {
