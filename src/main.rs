@@ -99,6 +99,14 @@ async fn info(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, node.info());
     Ok(resp)
 }
+
+async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let node = ChordNode::borrow_from(&state);
+    let ring = node.ring_info().await?;
+    let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, ring);
+    Ok(resp)
+}
+
 async fn update_finger_table(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -123,7 +131,7 @@ async fn update_finger_table(state: &mut State) -> Result<Response<Body>, Handle
     Ok(response)
 }
 
-async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError>{
+async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
     let mut n = String::new();
@@ -133,7 +141,9 @@ async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError>{
         }
     }
     if n == "" {
-        let error = SimpleError::new(format!("Invalid data, expected n: IP address of node that created this PATCH request"));
+        let error = SimpleError::new(format!(
+            "Invalid data, expected n: IP address of node that created this PATCH request"
+        ));
         let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
         return Err(handler_error);
     }
@@ -169,6 +179,7 @@ fn router(chord: ChordNode) -> Router {
     let (chain, pipelines) = single_pipeline(pipeline);
 
     build_router(chain, pipelines, |route| {
+        route.get("/ring").to_async_borrowing(get_ring);
         route.scope("/successor", |route| {
             route.get("/").to(get_successor);
             route.patch("/").to_async_borrowing(update_successor);
