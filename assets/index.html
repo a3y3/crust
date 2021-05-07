@@ -1,51 +1,60 @@
 <html>
 
 <head>
-    <!-- <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style type="text/css">
         #mynetwork {
             width: 600px;
             height: 400px;
-            border: 1px solid lightgray;
+            text-align: center;
         }
-    </style> -->
+    </style>
 </head>
 
 <body>
-    <!-- <div id="mynetwork"></div>
+    <div id="mynetwork"></div>
 
     <script type="text/javascript">
-        // create an array with nodes
-        var nodes = new vis.DataSet([
-            { id: 1, label: 'Node 1' },
-            { id: 2, label: 'Node 2' },
-            { id: 3, label: 'Node 3' },
-            { id: 4, label: 'Node 4' },
-            { id: 5, label: 'Node 5' }
-        ]);
+        function sleep(time) {
+            return new Promise((resolve) => setTimeout(resolve, time));
+        }
 
-        // create an array with edges
-        var edges = new vis.DataSet([
-            { from: 1, to: 3 },
-            { from: 1, to: 2 },
-            { from: 2, to: 4 },
-            { from: 2, to: 5 }
-        ]);
+        function httpGet(theUrl) {
+            let xmlHttp = new XMLHttpRequest();
+            xmlHttp.open("GET", theUrl, false);
+            // xmlHttp.responseType = 'json';
+            edges = []
+            nodes = []
 
-        // create a network
-        var container = document.getElementById('mynetwork');
+            xmlHttp.send(null);
+            let jsondata = JSON.parse(xmlHttp.responseText);
+            for (i = 0; i < jsondata.length; i++) {
+                let edge = { "arrows": "to" };
+                let node = {};
+                edge.from = jsondata[i].from;
+                edge.to = jsondata[i].to;
+                node.id = jsondata[i].from;
+                node.label = "Node " + jsondata[i].from;
+                edges[i] = edge;
+                nodes[i] = node;
+            }
+            let n = new vis.DataSet(nodes);
+            let e = new vis.DataSet(edges);
+            let data = {
+                nodes: n,
+                edges: e
+            };
+            let options = {};
 
-        // provide the data in the vis format
-        var data = {
-            nodes: nodes,
-            edges: edges
-        };
-        var options = {};
+            let network = new vis.Network(document.getElementById('mynetwork'), data, options);
 
-        // initialize your network!
-        var network = new vis.Network(container, data, options);
-    </script> -->
-    Hello world
+            sleep(1000).then(() => {
+                httpGet("http://0.0.0.0:8000/ring");
+            });
+        }
+
+        httpGet("http://0.0.0.0:8000/ring");
+    </script>
 </body>
 
 </html>

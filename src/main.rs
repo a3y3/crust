@@ -180,6 +180,7 @@ fn router(chord: ChordNode) -> Router {
 
     build_router(chain, pipelines, |route| {
         route.get("/ring").to_async_borrowing(get_ring);
+        route.get("/").to_file("assets/index.html");
         route.scope("/successor", |route| {
             route.get("/").to(get_successor);
             route.patch("/").to_async_borrowing(update_successor);

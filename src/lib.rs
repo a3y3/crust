@@ -197,7 +197,6 @@ impl ChordNode {
         let start = current; //63
         let mut succ_ip = self.get_successor();
         let mut successor = get_identifier(&succ_ip.to_string()); //36
-        println!("succ: {}", successor);
         let v = VisInfo::new(current, successor);
         let mut result = Vec::new();
         result.push(v);
@@ -207,7 +206,6 @@ impl ChordNode {
             curr_ip = succ_ip;
             succ_ip = get_req(curr_ip, HTTP_SUCCESSOR, &self).await?.parse()?;
             successor = get_identifier(&succ_ip.to_string());
-            println!("current:{}, successor:{}", current, successor);
             let vis = VisInfo::new(current, successor);
             result.push(vis);
         }
