@@ -64,8 +64,8 @@
                 nodes: n,
                 edges: e
             };
-            let options = {};
 
+            let options = { layout: { randomSeed: 1 } };
             let network = new vis.Network(document.getElementById('mynetwork'), data, options);
 
             sleep(1500).then(() => httpGet("/ring"));

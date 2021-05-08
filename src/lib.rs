@@ -198,22 +198,24 @@ impl ChordNode {
     }
 
     pub async fn ring_info(&self) -> Result<String, HandlerError> {
+        let mut set = HashSet::new();
         let mut curr_ip = self.self_ip;
-        let mut current = get_identifier(&curr_ip.to_string()); //63
-        let start = current; //63
+        let mut current = get_identifier(&curr_ip.to_string());
+        set.insert(current);
         let mut succ_ip = self.get_successor();
-        let mut successor = get_identifier(&succ_ip.to_string()); //36
+        let mut successor = get_identifier(&succ_ip.to_string());
         let v = VisInfo::new(current, successor);
         let mut result = Vec::new();
         result.push(v);
 
-        while start != successor {
-            current = successor; //36
+        while !set.contains(&successor) {
+            current = successor;
             curr_ip = succ_ip;
             succ_ip = get_req(curr_ip, HTTP_SUCCESSOR, &self).await?.parse()?;
             successor = get_identifier(&succ_ip.to_string());
             let vis = VisInfo::new(current, successor);
             result.push(vis);
+            set.insert(current);
         }
 
         Ok(serde_json::to_string_pretty(&result).expect("Error serializing ring info"))
@@ -289,7 +291,7 @@ impl ChordNode {
             id,
             Bracket::Open,
         );
-        for entry in self.finger_table.lock().unwrap().iter().rev() {
+        for entry in self.finger_table.lock().unwrap().iter() {
             if interval.contains(entry.successor) {
                 return entry.node_ip;
             }
@@ -338,7 +340,7 @@ impl ChordNode {
             thread::sleep(Duration::from_secs(STABILIZE_INTERVAL));
             let succ_ip = self.get_successor();
             let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR, self).await?;
-            if !is_node_alive(successors_predecessor.parse()?, Some(&client)).await {
+            if !is_node_alive(successors_predecessor.parse()?, Some(&client)).await || successors_predecessor == self.self_ip.to_string(){
                 continue;
             }
             let successors_predecessor_id = get_identifier(&successors_predecessor);
@@ -510,7 +512,7 @@ impl ChordNode {
         return self.self_ip;
     }
 
-    pub async fn insert(&self, key: String) -> Result<IpAddr, HandlerError> {
+    pub async fn insert(&self, key: String) -> Result<String, HandlerError> {
         let key_id = get_identifier(&key);
         let key_successor = self.calculate_successor(&key_id.to_string()).await?;
         if key_successor == self.self_ip {
@@ -518,9 +520,10 @@ impl ChordNode {
             (*self.hash_set.lock().unwrap()).insert(key.clone());
             self.send_to_replicas(key).await?;
         } else {
-            data_req(key_successor, HTTP_KEY, vec![("key", key)], &self, "POST").await?;
+            let inserted_at = data_req(key_successor, HTTP_KEY, vec![("key", key)], &self, "POST").await?;
+            return Ok(inserted_at);
         }
-        Ok(self.self_ip)
+        Ok(self.self_ip.to_string())
     }
 
     async fn send_to_replicas(&self, key: String) -> Result<(), HandlerError> {
@@ -629,7 +632,7 @@ async fn init_finger_table(
             .await?
             .text()
             .await?;
-            println!("My successor is {}", succ_ip);
+            println!("My successor is {} (id:{})", succ_ip, get_identifier(&succ_ip.to_string()));
             succ_ip
         } else {
             self_ip.to_string()
@@ -678,7 +681,7 @@ async fn data_req<T, U>(
     data: Vec<(T, U)>,
     chord_node: &ChordNode,
     req_type: &str,
-) -> Result<(), HandlerError>
+) -> Result<String, HandlerError>
 where
     T: Serialize + Sized,
     U: Serialize + Sized,
@@ -721,8 +724,8 @@ where
         }
     };
 
-    request_unsuccessful(response, "PATCH").await?;
-    Ok(())
+    let text = request_unsuccessful(response, req_type).await?;
+    Ok(text)
 }
 
 async fn request_unsuccessful(response: Response, req_type: &str) -> Result<String, HandlerError> {
