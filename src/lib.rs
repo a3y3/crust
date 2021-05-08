@@ -291,7 +291,7 @@ impl ChordNode {
             id,
             Bracket::Open,
         );
-        for entry in self.finger_table.lock().unwrap().iter() {
+        for entry in self.finger_table.lock().unwrap().iter().rev() {
             if interval.contains(entry.successor) {
                 return entry.node_ip;
             }
@@ -525,7 +525,8 @@ impl ChordNode {
                 data_req(key_successor, HTTP_KEY, vec![("key", key)], &self, "POST").await?;
             return Ok(inserted_at);
         }
-        Ok(self.self_ip.to_string())
+        let self_id = get_identifier(&self.self_ip.to_string());
+        Ok(self_id.to_string())
     }
 
     async fn send_to_replicas(&self, key: String) -> Result<(), HandlerError> {

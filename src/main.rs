@@ -17,7 +17,6 @@ use extractor::PathExtractor;
 mod lib;
 use lib::initialize_node;
 use lib::start_stabilize_thread;
-use lib::get_identifier;
 use lib::ChordNode;
 
 const PORT: usize = 8000;
@@ -159,13 +158,17 @@ async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
 async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let key = get_key_from_body(state).await?;
     let node = state.borrow::<ChordNode>();
-    let inserted_at_ip = node.insert(key).await?;
-    let inserted_at_id = get_identifier(&inserted_at_ip.to_string());
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, format!("Inserted at node:{} (id:{})", inserted_at_ip, inserted_at_id));
+    let inserted_at_id = node.insert(key).await?;
+    let response = create_response(
+        &state,
+        StatusCode::OK,
+        TEXT_PLAIN,
+        format!("{}", inserted_at_id),
+    );
     Ok(response)
 }
 
-async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerError>{
+async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let key = get_key_from_body(state).await?;
     let node = state.borrow::<ChordNode>();
     node.insert_replica(key);
@@ -173,7 +176,7 @@ async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerErro
     Ok(response)
 }
 
-async fn get_key_from_body(state: &mut State) -> Result<String, HandlerError>{
+async fn get_key_from_body(state: &mut State) -> Result<String, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
     let mut key = String::new();
