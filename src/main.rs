@@ -17,6 +17,7 @@ use extractor::PathExtractor;
 mod lib;
 use lib::initialize_node;
 use lib::start_stabilize_thread;
+use lib::get_identifier;
 use lib::ChordNode;
 
 const PORT: usize = 8000;
@@ -123,7 +124,7 @@ async fn update_finger_table(state: &mut State) -> Result<Response<Body>, Handle
     Ok(response)
 }
 
-async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError>{
+async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
     let mut n = String::new();
@@ -133,28 +134,42 @@ async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError>{
         }
     }
     if n == "" {
-        let error = SimpleError::new(format!("Invalid data, expected n: IP address of node that created this PATCH request"));
+        let error = SimpleError::new(format!(
+            "Invalid data, expected n: IP address of node that created this PATCH request"
+        ));
         let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
         return Err(handler_error);
     }
 
     let node = state.borrow::<ChordNode>();
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
     node.notify(n.parse()?).await;
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
     Ok(response)
 }
+
 /// add a new key-value pair to the DHT (supplied as POST to /key/)
-fn create_value(_state: State) -> (State, String) {
-    unimplemented!()
+async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let full_body = body::to_bytes(Body::take_from(state)).await?;
+    let data = form_urlencoded::parse(&full_body).into_owned();
+    let mut key = String::new();
+    for (k, v) in data {
+        if k == "key" {
+            key = v;
+        } else {
+            let error = SimpleError::new(format!("Invalid key {}, expected key: 'key'", k));
+            let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
+            return Err(handler_error);
+        }
+    }
+    let node = state.borrow::<ChordNode>();
+    let inserted_at_ip = node.insert(key).await?;
+    let inserted_at_id = get_identifier(&inserted_at_ip.to_string());
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, format!("Inserted at node:{} (id:{})", inserted_at_ip, inserted_at_id));
+    Ok(response)
 }
 
 /// returns the value corresponsing to the key in (GET /key/:key)
 fn get_value(_state: State) -> (State, String) {
-    unimplemented!()
-}
-
-/// update the value corresponding to the supplied key (PATCH /key/:key)
-fn update_value(_state: State) -> (State, String) {
     unimplemented!()
 }
 
@@ -191,19 +206,12 @@ fn router(chord: ChordNode) -> Router {
             .to_async_borrowing(update_finger_table);
         route.patch("/notify").to_async_borrowing(notify);
         route.scope("/key", |route| {
-            route.post("/").to(create_value);
+            route.post("/").to_async_borrowing(insert);
             route
-                .get("/:key") // GET /key/1234
+                .get("/:key")
                 .with_path_extractor::<PathExtractor>()
                 .to(get_value);
-            route
-                .patch("/:key") // PATCH /key/1234
-                .with_path_extractor::<PathExtractor>()
-                .to(update_value);
-            route
-                .delete("/:key") // DELETE /key/1234
-                .with_path_extractor::<PathExtractor>()
-                .to(delete_value);
+            route.delete("/").to(delete_value);
         });
     })
 }

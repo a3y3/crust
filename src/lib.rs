@@ -6,7 +6,7 @@ use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json;
 use simple_error::SimpleError;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
@@ -122,7 +122,7 @@ impl FingerTableEntry {
 #[derive(Clone, StateData)]
 pub struct ChordNode {
     finger_table: Arc<Mutex<Vec<FingerTableEntry>>>,
-    hash_map: Arc<Mutex<HashMap<String, String>>>,
+    hash_set: Arc<Mutex<HashSet<String>>>,
     self_ip: IpAddr,
     predecessor: Arc<Mutex<IpAddr>>,
     successor_list: Arc<Mutex<Vec<IpAddr>>>,
@@ -158,17 +158,17 @@ impl Serialize for ChordNode {
 impl ChordNode {
     fn new(
         finger_table: Vec<FingerTableEntry>,
-        hash_map: HashMap<String, String>,
+        hash_set: HashSet<String>,
         self_ip: IpAddr,
         predecessor: IpAddr,
     ) -> Self {
         let finger_table = Arc::new(Mutex::new(finger_table));
-        let hash_map = Arc::new(Mutex::new(hash_map));
+        let hash_set = Arc::new(Mutex::new(hash_set));
         let predecessor = Arc::new(Mutex::new(predecessor));
         let successor_list = Arc::new(Mutex::new(Vec::new()));
         Self {
             finger_table,
-            hash_map,
+            hash_set,
             self_ip,
             predecessor,
             successor_list,
@@ -279,11 +279,12 @@ impl ChordNode {
                 return Ok(());
             }
             println!("Done. Patching my predecessor ({})", pred_id);
-            patch_req(
+            data_req(
                 pred,
                 HTTP_FINGER_TABLE,
                 vec![("n", s.to_string()), ("i", i.to_string())],
                 self,
+                "PATCH",
             )
             .await?;
         }
@@ -311,11 +312,12 @@ impl ChordNode {
             }
 
             // notify successor that this node should be their predecessor
-            patch_req(
+            data_req(
                 succ_ip,
                 HTTP_NOTIFY,
                 vec![("n", self.self_ip.to_string())],
                 self,
+                "PATCH",
             )
             .await?;
 
@@ -467,6 +469,18 @@ impl ChordNode {
         }
         return self.self_ip;
     }
+
+    pub async fn insert(&self, key: String) -> Result<IpAddr, HandlerError> {
+        let key_id = get_identifier(&key);
+        let key_successor = self.calculate_successor(&key_id.to_string()).await?;
+        if key_successor == self.self_ip {
+            //insert here!
+            (*self.hash_set.lock().unwrap()).insert(key);
+        } else {
+            
+        }
+        Ok(self.self_ip)
+    }
 }
 
 pub fn initialize_node() -> ChordNode {
@@ -477,7 +491,7 @@ pub fn initialize_node() -> ChordNode {
     if args.len() == 1 {
         // first node
         let mut finger_table = Vec::new();
-        let hash_map = HashMap::new();
+        let hash_map = HashSet::new();
         let m = (M as f64).log2() as u32;
         for i in 0..m {
             let start = get_start(self_id, i);
@@ -544,7 +558,7 @@ async fn init_finger_table(
 
     Ok(ChordNode::new(
         finger_table,
-        HashMap::new(),
+        HashSet::new(),
         self_ip,
         predecessor,
     ))
@@ -572,23 +586,47 @@ async fn get_req(ip: IpAddr, path: &str, chord_node: &ChordNode) -> Result<Strin
     return Ok(text);
 }
 
-async fn patch_req<T, U>(
+async fn data_req<T, U>(
     ip: IpAddr,
     path: &str,
     data: Vec<(T, U)>,
     chord_node: &ChordNode,
+    req_type: &str,
 ) -> Result<(), HandlerError>
 where
     T: Serialize + Sized,
     U: Serialize + Sized,
 {
     let client = reqwest::Client::new();
-    let response = client
-        .patch(format!("http://{}:{}/{}", ip, PORT, path))
-        .timeout(Duration::from_secs(REQ_TIMEOUT))
-        .form(&data)
-        .send()
-        .await;
+    let response = match req_type {
+        "PATCH" => {
+            client
+                .patch(format!("http://{}:{}/{}", ip, PORT, path))
+                .timeout(Duration::from_secs(REQ_TIMEOUT))
+                .form(&data)
+                .send()
+                .await
+        }
+        "POST" => {
+            client
+                .post(format!("http://{}:{}/{}", ip, PORT, path))
+                .timeout(Duration::from_secs(REQ_TIMEOUT))
+                .form(&data)
+                .send()
+                .await
+        }
+        "DELETE" => {
+            client
+                .delete(format!("http://{}:{}/{}", ip, PORT, path))
+                .timeout(Duration::from_secs(REQ_TIMEOUT))
+                .form(&data)
+                .send()
+                .await
+        }
+        _ => {
+            panic!("That's not a valid request type")
+        }
+    };
     let response = match response {
         Ok(resp) => resp,
         Err(e) => {
@@ -645,7 +683,7 @@ async fn err_stabilize(chord_node: ChordNode) {
         match chord_node.stabilize().await {
             Ok(()) => {}
             Err(_e) => {
-                println!("Warning: Retrying stabilize() to see if the issue was fixed automatically (there's a good chance it was). If you see this warning more than 5-6 times in a row, exit the program and debug.")
+                println!("Warning: Retrying stabilize() to see if the issue was fixed automatically (there's a good chance it was). If you see this warning more than 5-6 times in a row, exit the program and debug - but if you see nothing after this, the issue was likely self-fixed.")
             }
         }
     }
@@ -657,7 +695,7 @@ fn get_self_ip() -> IpAddr {
     socket.local_addr().unwrap().ip()
 }
 
-fn get_identifier(key: &String) -> u64 {
+pub fn get_identifier(key: &String) -> u64 {
     fn hasher(key: &String) -> u64 {
         let mut s = DefaultHasher::new();
         key.hash(&mut s);
