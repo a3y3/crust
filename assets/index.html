@@ -1,17 +1,63 @@
-<!DOCTYPE html>
-<html lang="en">
+<html>
 
 <head>
-  <meta charset="UTF-8">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>crust | Distributed Hash Table in Rust</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style type="text/css">
+        #mynetwork {
+            width: 600px;
+            height: 400px;
+            text-align: center;
+        }
+    </style>
 </head>
 
 <body>
-  <form action="/key" method="post">
-    <input type="text" name="key">
-  </form>
+    <form action="/key" method="post">
+        <input type="text" name="key">
+    </form>
+    <div id="mynetwork"></div>
+
+    <script type="text/javascript">
+        function sleep(time) {
+            return new Promise((resolve) => setTimeout(resolve, time));
+        }
+
+        function httpGet(theUrl) {
+            let xmlHttp = new XMLHttpRequest();
+            xmlHttp.open("GET", theUrl, false);
+            // xmlHttp.responseType = 'json';
+            edges = []
+            nodes = []
+
+            xmlHttp.send(null);
+            let jsondata = JSON.parse(xmlHttp.responseText);
+            for (i = 0; i < jsondata.length; i++) {
+                let edge = { "arrows": "to" };
+                let node = {};
+                edge.from = jsondata[i].from;
+                edge.to = jsondata[i].to;
+                node.id = jsondata[i].from;
+                node.label = "Node " + jsondata[i].from;
+                edges[i] = edge;
+                nodes[i] = node;
+            }
+            let n = new vis.DataSet(nodes);
+            let e = new vis.DataSet(edges);
+            let data = {
+                nodes: n,
+                edges: e
+            };
+            let options = {};
+
+            let network = new vis.Network(document.getElementById('mynetwork'), data, options);
+
+            sleep(1000).then(() => {
+                httpGet("http://0.0.0.0:8000/ring");
+            });
+        }
+
+        httpGet("http://0.0.0.0:8000/ring");
+    </script>
 </body>
 
 </html>

@@ -3,6 +3,7 @@ use gotham_derive::StateData;
 use rand::Rng;
 use reqwest::Response;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
+use serde_derive::Serialize;
 use serde_json;
 use simple_error::SimpleError;
 use std::collections::hash_map::DefaultHasher;
@@ -119,6 +120,17 @@ impl FingerTableEntry {
     }
 }
 
+#[derive(Serialize)]
+struct VisInfo {
+    from: u64,
+    to: u64,
+}
+
+impl VisInfo {
+    fn new(from: u64, to: u64) -> Self {
+        Self { from, to }
+    }
+}
 #[derive(Clone, StateData)]
 pub struct ChordNode {
     finger_table: Arc<Mutex<Vec<FingerTableEntry>>>,
@@ -177,6 +189,28 @@ impl ChordNode {
 
     pub fn info(&self) -> String {
         serde_json::to_string_pretty(self).expect("Can't serialize table")
+    }
+
+    pub async fn ring_info(&self) -> Result<String, HandlerError> {
+        let mut curr_ip = self.self_ip;
+        let mut current = get_identifier(&curr_ip.to_string()); //63
+        let start = current; //63
+        let mut succ_ip = self.get_successor();
+        let mut successor = get_identifier(&succ_ip.to_string()); //36
+        let v = VisInfo::new(current, successor);
+        let mut result = Vec::new();
+        result.push(v);
+
+        while start != successor {
+            current = successor; //36
+            curr_ip = succ_ip;
+            succ_ip = get_req(curr_ip, HTTP_SUCCESSOR, &self).await?.parse()?;
+            successor = get_identifier(&succ_ip.to_string());
+            let vis = VisInfo::new(current, successor);
+            result.push(vis);
+        }
+
+        Ok(serde_json::to_string_pretty(&result).expect("Error serializing ring info"))
     }
 
     pub fn get_successor(&self) -> IpAddr {

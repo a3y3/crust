@@ -100,6 +100,14 @@ async fn info(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, node.info());
     Ok(resp)
 }
+
+async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let node = ChordNode::borrow_from(&state);
+    let ring = node.ring_info().await?;
+    let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, ring);
+    Ok(resp)
+}
+
 async fn update_finger_table(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -184,6 +192,8 @@ fn router(chord: ChordNode) -> Router {
     let (chain, pipelines) = single_pipeline(pipeline);
 
     build_router(chain, pipelines, |route| {
+        route.get("/ring").to_async_borrowing(get_ring);
+        route.get("/").to_file("assets/index.html");
         route.scope("/successor", |route| {
             route.get("/").to(get_successor);
             route.patch("/").to_async_borrowing(update_successor);
