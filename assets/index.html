@@ -12,12 +12,22 @@
 </head>
 
 <body>
+    <form id="form_get_value" method="get" action="#" onsubmit="addValToGet(event)">
+        Check if value exists in the Distributed Hash Set (contains): <input type="text" name="key" id="input_get" autocomplete="off">
+    </form>
     <form action="/key" method="post">
-        <input type="text" name="key">
+        Insert a new value in the Distributed Hash Set (insert): <input type="text" name="key" autocomplete="off">
     </form>
     <div id="mynetwork"></div>
 
     <script type="text/javascript">
+        function addValToGet(event) {
+            console.log(event);
+            event.preventDefault();
+            let src = "/key/" + document.getElementById("input_get").value;
+            let form = document.getElementById('form_get_value');
+            window.open(src,"_self");
+        }
         function sleep(time) {
             return new Promise((resolve) => setTimeout(resolve, time));
         }
@@ -30,7 +40,14 @@
             nodes = []
 
             xmlHttp.send(null);
-            let jsondata = JSON.parse(xmlHttp.responseText);
+            let jsondata;
+            try {
+                jsondata = JSON.parse(xmlHttp.responseText);
+            }
+            catch (err) {
+                console.warn(`Logged an error with ${xmlHttp.responseText}. Retrying after 1.5 seconds...`);
+                sleep(1500).then(() => httpGet("/ring"));
+            }
             for (i = 0; i < jsondata.length; i++) {
                 let edge = { "arrows": "to" };
                 let node = {};
@@ -51,12 +68,10 @@
 
             let network = new vis.Network(document.getElementById('mynetwork'), data, options);
 
-            sleep(1000).then(() => {
-                httpGet("http://0.0.0.0:8000/ring");
-            });
+            sleep(1500).then(() => httpGet("/ring"));
         }
 
-        httpGet("http://0.0.0.0:8000/ring");
+        httpGet("/ring");
     </script>
 </body>
 

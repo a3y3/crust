@@ -155,8 +155,25 @@ async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
     Ok(response)
 }
 
-/// add a new key-value pair to the DHT (supplied as POST to /key/)
+/// add a new key to the DST (supplied as POST to /key/)
 async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let key = get_key_from_body(state).await?;
+    let node = state.borrow::<ChordNode>();
+    let inserted_at_ip = node.insert(key).await?;
+    let inserted_at_id = get_identifier(&inserted_at_ip.to_string());
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, format!("Inserted at node:{} (id:{})", inserted_at_ip, inserted_at_id));
+    Ok(response)
+}
+
+async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerError>{
+    let key = get_key_from_body(state).await?;
+    let node = state.borrow::<ChordNode>();
+    node.insert_replica(key);
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
+    Ok(response)
+}
+
+async fn get_key_from_body(state: &mut State) -> Result<String, HandlerError>{
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
     let mut key = String::new();
@@ -169,16 +186,16 @@ async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
             return Err(handler_error);
         }
     }
-    let node = state.borrow::<ChordNode>();
-    let inserted_at_ip = node.insert(key).await?;
-    let inserted_at_id = get_identifier(&inserted_at_ip.to_string());
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, format!("Inserted at node:{} (id:{})", inserted_at_ip, inserted_at_id));
-    Ok(response)
+    Ok(key)
 }
 
 /// returns the value corresponsing to the key in (GET /key/:key)
-fn get_value(_state: State) -> (State, String) {
-    unimplemented!()
+async fn contains(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let node = ChordNode::borrow_from(&state);
+    let key = &PathExtractor::borrow_from(&state).key;
+    let contains = node.contains(key).await?;
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, contains.to_string());
+    Ok(response)
 }
 
 /// delete a key value pair (DELETE /key/:key)
@@ -220,9 +237,10 @@ fn router(chord: ChordNode) -> Router {
             route
                 .get("/:key")
                 .with_path_extractor::<PathExtractor>()
-                .to(get_value);
+                .to_async_borrowing(contains);
             route.delete("/").to(delete_value);
         });
+        route.post("/replica").to_async_borrowing(insert_replica);
     })
 }
 

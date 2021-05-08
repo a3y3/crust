@@ -22,6 +22,8 @@ const HTTP_SUCCESSOR_CPF: &str = "successor/cpf/";
 const HTTP_PREDECESSOR: &str = "predecessor/";
 const HTTP_FINGER_TABLE: &str = "fingertable/";
 const HTTP_NOTIFY: &str = "notify/";
+const HTTP_KEY: &str = "key/";
+const HTTP_REPLICA: &str = "replica/";
 
 const STABILIZE_INTERVAL: u64 = 2;
 const LIVENESS_TIMEOUT: u64 = 1;
@@ -99,7 +101,7 @@ impl Serialize for FingerTableEntry {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("Interval", 4)?;
+        let mut state = serializer.serialize_struct("FingerTableEntry", 4)?;
         state.serialize_field("start", &self.start)?;
         state.serialize_field("interval", &format!("{}", self.interval))?;
         state.serialize_field("successor_id", &self.successor)?;
@@ -138,6 +140,7 @@ pub struct ChordNode {
     self_ip: IpAddr,
     predecessor: Arc<Mutex<IpAddr>>,
     successor_list: Arc<Mutex<Vec<IpAddr>>>,
+    replica_set: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Serialize for ChordNode {
@@ -154,10 +157,11 @@ impl Serialize for ChordNode {
             .iter()
             .map(|ip| (ip, get_identifier(&ip.to_string())))
             .collect();
+        let hash_set = self.hash_set.lock().unwrap();
 
-        let mut state = serializer.serialize_struct("Interval", 4)?;
+        let mut state = serializer.serialize_struct("ChordNode", 5)?;
         state.serialize_field("finger_table", &*finger_table)?;
-        state.serialize_field("hash_map", &"fixme: unimplemented!()")?;
+        state.serialize_field("hash_set", &*hash_set)?;
         state.serialize_field("self_ip", &self.self_ip)?;
         state.serialize_field("self_id", &self_id)?;
         state.serialize_field("predecessor", &*predecessor)?;
@@ -178,12 +182,14 @@ impl ChordNode {
         let hash_set = Arc::new(Mutex::new(hash_set));
         let predecessor = Arc::new(Mutex::new(predecessor));
         let successor_list = Arc::new(Mutex::new(Vec::new()));
+        let replica_set = Arc::new(Mutex::new(HashSet::new()));
         Self {
             finger_table,
             hash_set,
             self_ip,
             predecessor,
             successor_list,
+            replica_set,
         }
     }
 
@@ -509,11 +515,57 @@ impl ChordNode {
         let key_successor = self.calculate_successor(&key_id.to_string()).await?;
         if key_successor == self.self_ip {
             //insert here!
-            (*self.hash_set.lock().unwrap()).insert(key);
+            (*self.hash_set.lock().unwrap()).insert(key.clone());
+            self.send_to_replicas(key).await?;
         } else {
-            
+            data_req(key_successor, HTTP_KEY, vec![("key", key)], &self, "POST").await?;
         }
         Ok(self.self_ip)
+    }
+
+    async fn send_to_replicas(&self, key: String) -> Result<(), HandlerError> {
+        let list = self.successor_list.lock().unwrap().clone();
+        for node in list {
+            data_req(
+                node,
+                HTTP_REPLICA,
+                vec![("key", key.clone())],
+                &self,
+                "POST",
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub fn insert_replica(&self, key: String) {
+        (*self.replica_set.lock().unwrap()).insert(key);
+    }
+
+    pub async fn contains(&self, key: &String) -> Result<bool, HandlerError> {
+        let key_id = get_identifier(key);
+        let key_successor = self.calculate_successor(&key_id.to_string()).await?;
+        if key_successor == self.self_ip {
+            // this node is responsible for this key!
+            match (*self.hash_set.lock().unwrap()).contains(key) {
+                true => return Ok(true),
+                false => match (*self.replica_set.lock().unwrap()).contains(key) {
+                    true => {
+                        println!("Warning: Key found, but in replica set. This means this node is now the new owner of this key (as opposed to being just a replica). Some keys should be moved from replica set to hash set.");
+                        return Ok(true);
+                    }
+                    false => {
+                        return Ok(false);
+                    }
+                },
+            }
+        } else {
+            // this node isn't responsible, contact key_successor.
+            let result: bool = get_req(key_successor, &format!("{}{}", HTTP_KEY, key), self)
+                .await?
+                .parse()?;
+            Ok(result)
+        }
     }
 }
 
