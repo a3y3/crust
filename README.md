@@ -12,7 +12,7 @@ There's no "hash map" functionality - but we have the actual protocol, Chord, up
 ## Run
 - To start the first node: `docker run --init --rm -p 8000:8000 crust`
 - Open a browser and go to `localhost:8000/info` to see the sucessor and predecessor pointers for the first node
-- To start the second node: open a new Terminal window and see the IP address from the output of the first node. For example, if it's `172.17.0.2`, run `docker run --init --rm -p 8000:8000 crust -- 172.17.0.2`
+- To start the second node: open a new Terminal window and see the IP address from the output of the first node. For example, if it's `172.17.0.2`, run `docker run --init --rm -p 8001:8000 crust -- 172.17.0.2`
 - Open a new tab and go to `localhost:8001/info` to see the pointers for the second node and so on
 
 Authors:
