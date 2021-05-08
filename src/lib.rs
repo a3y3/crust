@@ -340,28 +340,29 @@ impl ChordNode {
             thread::sleep(Duration::from_secs(STABILIZE_INTERVAL));
             let succ_ip = self.get_successor();
             let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR, self).await?;
-            if !is_node_alive(successors_predecessor.parse()?, Some(&client)).await || successors_predecessor == self.self_ip.to_string(){
-                continue;
-            }
-            let successors_predecessor_id = get_identifier(&successors_predecessor);
-            let self_id = get_identifier(&self.self_ip.to_string());
-            let succ_id = get_identifier(&succ_ip.to_string());
-            let int_self_to_successor =
-                Interval::new(Bracket::Open, self_id, succ_id, Bracket::Open);
-            if int_self_to_successor.contains(successors_predecessor_id) {
-                println!("stabilize() found a new successor, updating...");
-                self.update_successor(successors_predecessor.parse()?);
-            }
+            if is_node_alive(successors_predecessor.parse()?, Some(&client)).await
+                && successors_predecessor != self.self_ip.to_string()
+            {
+                let successors_predecessor_id = get_identifier(&successors_predecessor);
+                let self_id = get_identifier(&self.self_ip.to_string());
+                let succ_id = get_identifier(&succ_ip.to_string());
+                let int_self_to_successor =
+                    Interval::new(Bracket::Open, self_id, succ_id, Bracket::Open);
+                if int_self_to_successor.contains(successors_predecessor_id) {
+                    println!("stabilize() found a new successor, updating...");
+                    self.update_successor(successors_predecessor.parse()?);
+                }
 
-            // notify successor that this node should be their predecessor
-            data_req(
-                succ_ip,
-                HTTP_NOTIFY,
-                vec![("n", self.self_ip.to_string())],
-                self,
-                "PATCH",
-            )
-            .await?;
+                // notify successor that this node should be their predecessor
+                data_req(
+                    succ_ip,
+                    HTTP_NOTIFY,
+                    vec![("n", self.self_ip.to_string())],
+                    self,
+                    "PATCH",
+                )
+                .await?;
+            }
 
             // fix fingers
             self.fix_fingers().await?;
@@ -520,7 +521,8 @@ impl ChordNode {
             (*self.hash_set.lock().unwrap()).insert(key.clone());
             self.send_to_replicas(key).await?;
         } else {
-            let inserted_at = data_req(key_successor, HTTP_KEY, vec![("key", key)], &self, "POST").await?;
+            let inserted_at =
+                data_req(key_successor, HTTP_KEY, vec![("key", key)], &self, "POST").await?;
             return Ok(inserted_at);
         }
         Ok(self.self_ip.to_string())
@@ -554,7 +556,7 @@ impl ChordNode {
                 true => return Ok(true),
                 false => match (*self.replica_set.lock().unwrap()).contains(key) {
                     true => {
-                        println!("Warning: Key found, but in replica set. This means this node is now the new owner of this key (as opposed to being just a replica). Some keys should be moved from replica set to hash set.");
+                        println!("Warning: Key found, but in replica set. This means this node is now the new owner of this key (as opposed to being just a replica). This key should be moved from replica set to hash set.");
                         return Ok(true);
                     }
                     false => {
@@ -632,7 +634,11 @@ async fn init_finger_table(
             .await?
             .text()
             .await?;
-            println!("My successor is {} (id:{})", succ_ip, get_identifier(&succ_ip.to_string()));
+            println!(
+                "My successor is {} (id:{})",
+                succ_ip,
+                get_identifier(&succ_ip.to_string())
+            );
             succ_ip
         } else {
             self_ip.to_string()
