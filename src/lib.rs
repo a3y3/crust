@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::{env, fmt};
 use std::{thread, time::Duration};
 
-const M: u64 = 64;
-const PORT: usize = 8000;
+const M: u64 = 64; // number of "holes" in the Chord ring.
+const PORT: usize = 8000; // all nodes run on this PORT. This necessarily means that this application is intended to be used in a Docker environment.
 
 const HTTP_SUCCESSOR: &str = "successor/";
 const HTTP_SUCCESSOR_CPF: &str = "successor/cpf/";
@@ -25,14 +25,29 @@ const HTTP_NOTIFY: &str = "notify/";
 const HTTP_KEY: &str = "key/";
 const HTTP_REPLICA: &str = "replica/";
 
-const STABILIZE_INTERVAL: u64 = 2;
-const LIVENESS_TIMEOUT: u64 = 1;
-const REQ_TIMEOUT: u64 = 3;
+// following constants represent time in seconds.
+const STABILIZE_INTERVAL: u64 = 2; // stabilize() is called this often
+const LIVENESS_TIMEOUT: u64 = 1; // a node must reply back in this time to be considered "alive". Nodes that can't reply back this fast enough are considered dead, triggering failure recovery.
+const REQ_TIMEOUT: u64 = 3; // HTTP requests that take longer this are marked as errors.
+
 enum Bracket {
     Open,
     Closed,
 }
 
+/// Represents a circular mathematical interval. For example, 5 exists in the interval [5,7] and [5,7) but it doesn't in (5,7] or (5,7).
+/// Also, if `M` is 64, then:
+///     1. 63 exists in the interval [45, 2]
+///     2. 63 exists in the interval [62, 0]
+///     3. 63 exists in the interval (63, 63).
+/// ```
+/// let interval = Interval::new(Bracket::Closed, 45, 2, Bracket::Closed);
+/// assert_eq!(interval.contains(63), true);
+/// let interval = Interval::new(Bracket::Closed, 62, 0, Bracket::Closed);
+/// assert_eq!(interval.contains(63), true);
+/// let interval = Interval::new(Bracket::Open, 63, 63, Bracket::Open);
+/// assert_eq!(interval.contains(63), true);
+/// ```
 struct Interval {
     bracket1: Bracket,
     val1: u64,
@@ -68,7 +83,7 @@ impl Interval {
         }
     }
 
-    /// todo Needs improvement - right now this method uses a pretty inefficient way to check if a `val` lies between an `Interval. Selecting a `start` and and `end` and walking through each value between them isn't ideal, and we need  a faster way to do this.
+    /// Needs improvement - right now this method uses a pretty inefficient way to check if a `val` lies between an `Interval. Selecting a `start` and `end` and walking through each value between them isn't ideal, and we need  a faster way to do this.
     fn contains(&self, val: u64) -> bool {
         let mut start = match self.bracket1 {
             Bracket::Open => (self.val1 + 1) % M,
@@ -89,6 +104,11 @@ impl Interval {
         val == start
     }
 }
+/// Represents an entry in the Chord Node's finger table. 
+/// start - consult the Chord paper for an explanation.
+/// interval - consult the Chord paper for an explanation.
+/// successor - the ID of the successor node of start.
+/// node_ip - the actual IP address of the successor.
 struct FingerTableEntry {
     start: u64,
     interval: Interval,
@@ -122,6 +142,7 @@ impl FingerTableEntry {
     }
 }
 
+/// Used for constructing a JSON of successor pointers. This is used by the Javascript in `index.html` to render the Chord ring.
 #[derive(Serialize)]
 struct VisInfo {
     from: u64,
@@ -133,6 +154,8 @@ impl VisInfo {
         Self { from, to }
     }
 }
+/// In-memory data structure representing the finger tables, successor list, predecessor pointers, and hash set and replica set. 
+/// Since this struct will be cloned multiple times (each time a function receives this from a `State`, it's receiving a cloned version), all writable fields in this struct should be wrapped in `Arc`. This allows fast clones and allows all function to share the same data safely (using a Mutex).
 #[derive(Clone, StateData)]
 pub struct ChordNode {
     finger_table: Arc<Mutex<Vec<FingerTableEntry>>>,
@@ -193,10 +216,12 @@ impl ChordNode {
         }
     }
 
+    /// returns a serialized string of `Self`.
     pub fn info(&self) -> String {
         serde_json::to_string_pretty(self).expect("Can't serialize table")
     }
 
+    /// walks around the Chord ring using successor pointers and returns a JSON of `to` and `from` values using `VisInfo`.
     pub async fn ring_info(&self) -> Result<String, HandlerError> {
         let mut set = HashSet::new();
         let mut curr_ip = self.self_ip;
@@ -221,11 +246,13 @@ impl ChordNode {
         Ok(serde_json::to_string_pretty(&result).expect("Error serializing ring info"))
     }
 
+    /// returns the immediate successor of this node (the first value in the finger table)
     pub fn get_successor(&self) -> IpAddr {
         let table = self.finger_table.lock().unwrap();
         (*table).get(0).unwrap().node_ip
     }
 
+    /// updates the successor of this node to a new node.
     pub fn update_successor(&self, new_succ: IpAddr) {
         let mut table = self.finger_table.lock().unwrap();
         let prev_entry = table.get_mut(0).unwrap();
@@ -248,6 +275,7 @@ impl ChordNode {
         *self.predecessor.lock().unwrap() = ip
     }
 
+    /// calculates successor(k). This represents the first node on the Chord ring that can store the key k.
     pub async fn calculate_successor(&self, id: &String) -> Result<IpAddr, HandlerError> {
         let id: u64 = id.parse()?;
         assert!(id < M);
@@ -256,6 +284,7 @@ impl ChordNode {
         Ok(successor_ip.parse()?)
     }
 
+    /// calculates the node that preceeds the supplied `id`. Note that this method does NOT use the predecessor pointers of `Self`; rather this method walks around the Chord ring using the successor pointers (and the finger table entries) to find the predecessor.
     async fn calculate_predecessor(&self, id: u64) -> Result<IpAddr, HandlerError> {
         let mut n_dash = self.self_ip;
         loop {
@@ -282,6 +311,7 @@ impl ChordNode {
         Ok(n_dash)
     }
 
+    /// Returns the closest node that `Self` thinks that can store `id`.
     pub fn closest_preceding_finger(&self, id: &String) -> IpAddr {
         let id: u64 = id.parse().unwrap();
         assert!(id < M);
@@ -299,6 +329,7 @@ impl ChordNode {
         return self.self_ip;
     }
 
+    /// called when a node wants to add itself (`s`) as an `i`th entry in `Self`'s finger table.
     pub async fn update_finger_table(&mut self, s: IpAddr, i: u64) -> Result<(), HandlerError> {
         let self_id = get_identifier(&self.self_ip.to_string());
         let s_id = get_identifier(&s.to_string());
@@ -317,7 +348,7 @@ impl ChordNode {
             let pred = *self.predecessor.lock().unwrap();
             let pred_id = get_identifier(&pred.to_string());
             if pred_id == s_id {
-                println!("Warning: Skipping patching my predecessor because it's the same as s_id! See the README for what this warning means.");
+                println!("Warning: Skipping patching my predecessor because it's the same as s_id!");
                 return Ok(());
             }
             println!("Done. Patching my predecessor ({})", pred_id);
@@ -334,10 +365,11 @@ impl ChordNode {
         Ok(())
     }
 
+    /// Sees if there's a possible better successor for `Self` and updates if possible. This function is run periodically `STABILIZE_INTERVAL` times.
     async fn stabilize(&self) -> Result<(), HandlerError> {
         let client = reqwest::Client::new();
         loop {
-            thread::sleep(Duration::from_secs(STABILIZE_INTERVAL));
+            tokio::time::sleep(Duration::from_secs(STABILIZE_INTERVAL)).await;
             let succ_ip = self.get_successor();
             let successors_predecessor = get_req(succ_ip, HTTP_PREDECESSOR, self).await?;
             if is_node_alive(successors_predecessor.parse()?, Some(&client)).await
@@ -372,6 +404,7 @@ impl ChordNode {
         }
     }
 
+    /// `other_node` thinks that it should be `Self`'s direct predecessor. 
     pub async fn notify(&self, other_node: IpAddr) {
         let predecessor = self.get_predecessor();
         let pred_id = get_identifier(&predecessor.to_string());
@@ -437,6 +470,9 @@ impl ChordNode {
         Ok(())
     }
 
+    /// This function is called by the first function that detects that an HTTP request failed. Unfrotunately, that also means it's very hard to identify which method called `handle_failure`.
+    /// For example, this method can be called during `stabilize()` or when calculating a successor. Although in an ideal case both functions should have handled this very differently (for example, in an ideal scenario, `calculate_successor()` should notify the user that there was a failure and that they should try again; instead of just calling `handle_failure`).
+    /// Right now, this method simply contacts the successor and predecessor and attempts to fix these pointers by using the `successor_list`. 
     async fn handle_failure(&self) {
         // check if successor is alive
         println!("Failure detected, attempting to fix pointers...");
@@ -489,6 +525,7 @@ impl ChordNode {
         }
     }
 
+    /// used by `handle_failure` to contact each potential successor in `successor_list` and returning the first node that responds. 
     async fn get_first_live_successor(&self, client: &reqwest::Client) -> IpAddr {
         let entries: Vec<IpAddr> = {
             let table = self.successor_list.lock().unwrap();
@@ -513,6 +550,7 @@ impl ChordNode {
         return self.self_ip;
     }
 
+    /// uses `calculate_successor()` to find which node a key should be inserted in, then inserts the key on that node.
     pub async fn insert(&self, key: String) -> Result<String, HandlerError> {
         let key_id = get_identifier(&key);
         let key_successor = self.calculate_successor(&key_id.to_string()).await?;
@@ -529,6 +567,7 @@ impl ChordNode {
         Ok(self_id.to_string())
     }
 
+    /// Make copies of `key` and send it to all nodes in `successor_list` to be inserted as replicas.
     async fn send_to_replicas(&self, key: String) -> Result<(), HandlerError> {
         let list = self.successor_list.lock().unwrap().clone();
         for node in list {
@@ -548,6 +587,7 @@ impl ChordNode {
         (*self.replica_set.lock().unwrap()).insert(key);
     }
 
+    /// Uses `calculate_successor()` to find the node that's responsible for `key`, then asks that node if it has a key.
     pub async fn contains(&self, key: &String) -> Result<bool, HandlerError> {
         let key_id = get_identifier(key);
         let key_successor = self.calculate_successor(&key_id.to_string()).await?;
@@ -575,6 +615,8 @@ impl ChordNode {
     }
 }
 
+/// Creates and returns a new `ChordNode`. 
+/// This is comparatively easier when there are no arguments; this means that this node will be the first node in the ring. If there's an argument, it must be an IP address; that IP address will then be contacted and used to initialize this node's successor and predecessor fields.
 pub fn initialize_node() -> ChordNode {
     let args: Vec<String> = env::args().collect();
     let self_ip = get_self_ip();
@@ -603,10 +645,12 @@ pub fn initialize_node() -> ChordNode {
     }
 }
 
+/// `start` is a Chord term. n.finger[k].start=(n+2^k)%M.
 fn get_start(n: u64, k: u32) -> u64 {
     (n + u64::pow(2, k)) % M
 }
 
+/// Use an `existing_node` to initialize this `ChordNode`'s fields.
 async fn join(self_ip: IpAddr, existing_node: IpAddr) -> Result<ChordNode, HandlerError> {
     println!("Initializing my finger tables...");
     let node = init_finger_table(self_ip, existing_node).await?;
@@ -616,6 +660,7 @@ async fn join(self_ip: IpAddr, existing_node: IpAddr) -> Result<ChordNode, Handl
     Ok(node)
 }
 
+/// Create a blank finger table (where all entries point to `self_ip`) and return it. Only the first entry is initialized properly using `find_successor`.
 async fn init_finger_table(
     self_ip: IpAddr,
     existing_node: IpAddr,
@@ -664,6 +709,7 @@ async fn move_keys() -> Result<(), HandlerError> {
     Ok(())
 }
 
+/// Send a GET request and call `handle_failure` on request timeout/error.
 async fn get_req(ip: IpAddr, path: &str, chord_node: &ChordNode) -> Result<String, HandlerError> {
     let client = reqwest::Client::new();
     let resp = client
@@ -682,6 +728,7 @@ async fn get_req(ip: IpAddr, path: &str, chord_node: &ChordNode) -> Result<Strin
     return Ok(text);
 }
 
+/// create a request with a payload (POST, PATCH or DELETE) and send it to `ip`. Call `handle_failure` on request failure/timeout.
 async fn data_req<T, U>(
     ip: IpAddr,
     path: &str,
@@ -735,6 +782,7 @@ where
     Ok(text)
 }
 
+/// Mark a request as failed if the server response is not 200.
 async fn request_unsuccessful(response: Response, req_type: &str) -> Result<String, HandlerError> {
     let status = response.status();
     if status != 200 {
@@ -749,6 +797,7 @@ async fn request_unsuccessful(response: Response, req_type: &str) -> Result<Stri
     Ok(response.text().await?)
 }
 
+/// Mark a node as dead if it doesn't response within `LIVENESS_TIMEOUT`.
 async fn is_node_alive(ip: IpAddr, client: Option<&reqwest::Client>) -> bool {
     let client = match client {
         Some(client) => client.clone(),
@@ -774,6 +823,7 @@ pub fn start_stabilize_thread(chord_node: ChordNode) {
     });
 }
 
+/// If an error originates anywhere within `stabilize()`, we assume that it'll be fixed soon by `handle_failure`. This method ignores that error and calls `stabilize()` again.
 async fn err_stabilize(chord_node: ChordNode) {
     loop {
         match chord_node.stabilize().await {
@@ -785,12 +835,14 @@ async fn err_stabilize(chord_node: ChordNode) {
     }
 }
 
+/// Contact Google and return the IP address of this node.
 fn get_self_ip() -> IpAddr {
     let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
     socket.connect("8.8.8.8:80").unwrap();
     socket.local_addr().unwrap().ip()
 }
 
+/// Hash a key and return hash(key)%M.
 pub fn get_identifier(key: &String) -> u64 {
     fn hasher(key: &String) -> u64 {
         let mut s = DefaultHasher::new();

@@ -27,6 +27,7 @@ fn get_successor(state: State) -> (State, String) {
     (state, successor.to_string())
 }
 
+/// Update a node's successor to a new node (PATCH /successor/)
 async fn update_successor(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -55,6 +56,7 @@ fn get_predecessor(state: State) -> (State, String) {
     (state, predecessor.to_string())
 }
 
+/// update a node's predecessor pointer (PATCH /predecessor/)
 async fn update_predecessor(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -87,6 +89,7 @@ async fn calculate_successor(state: &mut State) -> Result<Response<Body>, Handle
     Ok(response)
 }
 
+/// Find the closest predecessing finger for a given id (GET /successor/cfp/:id)
 fn closest_preceding_finger(state: State) -> (State, String) {
     let node = ChordNode::borrow_from(&state);
     let id = &PathExtractor::borrow_from(&state).key;
@@ -94,12 +97,14 @@ fn closest_preceding_finger(state: State) -> (State, String) {
     (state, res.to_string())
 }
 
+/// return all information about this node (GET /info/)
 async fn info(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, node.info());
     Ok(resp)
 }
 
+/// return a JSON representing the structure of the Chord ring (GET /ring/)
 async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let ring = node.ring_info().await?;
@@ -107,6 +112,7 @@ async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
     Ok(resp)
 }
 
+/// update the finger tables of a node (PATCH /fingertable/) 
 async fn update_finger_table(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -131,6 +137,7 @@ async fn update_finger_table(state: &mut State) -> Result<Response<Body>, Handle
     Ok(response)
 }
 
+/// Notify a node that there might be a better predecessor (PATCH /notify/)
 async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -168,6 +175,7 @@ async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
     Ok(response)
 }
 
+/// Adds a key to a node's replica_state field. (POST /replica/)
 async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let key = get_key_from_body(state).await?;
     let node = state.borrow::<ChordNode>();
@@ -176,6 +184,7 @@ async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerErro
     Ok(response)
 }
 
+/// Return the field `key` from a POST body.
 async fn get_key_from_body(state: &mut State) -> Result<String, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -199,11 +208,6 @@ async fn contains(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let contains = node.contains(key).await?;
     let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, contains.to_string());
     Ok(response)
-}
-
-/// delete a key value pair (DELETE /key/:key)
-fn delete_value(_state: State) -> (State, String) {
-    unimplemented!()
 }
 
 fn router(chord: ChordNode) -> Router {
@@ -241,7 +245,6 @@ fn router(chord: ChordNode) -> Router {
                 .get("/:key")
                 .with_path_extractor::<PathExtractor>()
                 .to_async_borrowing(contains);
-            route.delete("/").to(delete_value);
         });
         route.post("/replica").to_async_borrowing(insert_replica);
     })
@@ -254,5 +257,3 @@ fn main() {
     println!("Listening for requests at http://{}", addr);
     gotham::start(addr, router(chord));
 }
-
-mod tests;
