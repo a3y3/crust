@@ -27,6 +27,7 @@ fn get_successor(state: State) -> (State, String) {
     (state, successor.to_string())
 }
 
+/// Update a node's successor to a new node (PATCH /successor/)
 async fn update_successor(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -55,6 +56,7 @@ fn get_predecessor(state: State) -> (State, String) {
     (state, predecessor.to_string())
 }
 
+/// update a node's predecessor pointer (PATCH /predecessor/)
 async fn update_predecessor(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -87,6 +89,7 @@ async fn calculate_successor(state: &mut State) -> Result<Response<Body>, Handle
     Ok(response)
 }
 
+/// Find the closest predecessing finger for a given id (GET /successor/cfp/:id)
 fn closest_preceding_finger(state: State) -> (State, String) {
     let node = ChordNode::borrow_from(&state);
     let id = &PathExtractor::borrow_from(&state).key;
@@ -94,12 +97,14 @@ fn closest_preceding_finger(state: State) -> (State, String) {
     (state, res.to_string())
 }
 
+/// return all information about this node (GET /info/)
 async fn info(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, node.info());
     Ok(resp)
 }
 
+/// return a JSON representing the structure of the Chord ring (GET /ring/)
 async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let ring = node.ring_info().await?;
@@ -107,6 +112,7 @@ async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
     Ok(resp)
 }
 
+/// update the finger tables of a node (PATCH /fingertable/) 
 async fn update_finger_table(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -131,6 +137,7 @@ async fn update_finger_table(state: &mut State) -> Result<Response<Body>, Handle
     Ok(response)
 }
 
+/// Notify a node that there might be a better predecessor (PATCH /notify/)
 async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -149,28 +156,58 @@ async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
     }
 
     let node = state.borrow::<ChordNode>();
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
     node.notify(n.parse()?).await;
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
     Ok(response)
 }
-/// add a new key-value pair to the DHT (supplied as POST to /key/)
-fn create_value(_state: State) -> (State, String) {
-    unimplemented!()
+
+/// add a new key to the DST (supplied as POST to /key/)
+async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let key = get_key_from_body(state).await?;
+    let node = state.borrow::<ChordNode>();
+    let inserted_at_id = node.insert(key).await?;
+    let response = create_response(
+        &state,
+        StatusCode::OK,
+        TEXT_PLAIN,
+        format!("{}", inserted_at_id),
+    );
+    Ok(response)
+}
+
+/// Adds a key to a node's replica_state field. (POST /replica/)
+async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let key = get_key_from_body(state).await?;
+    let node = state.borrow::<ChordNode>();
+    node.insert_replica(key);
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
+    Ok(response)
+}
+
+/// Return the field `key` from a POST body.
+async fn get_key_from_body(state: &mut State) -> Result<String, HandlerError> {
+    let full_body = body::to_bytes(Body::take_from(state)).await?;
+    let data = form_urlencoded::parse(&full_body).into_owned();
+    let mut key = String::new();
+    for (k, v) in data {
+        if k == "key" {
+            key = v;
+        } else {
+            let error = SimpleError::new(format!("Invalid key {}, expected key: 'key'", k));
+            let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
+            return Err(handler_error);
+        }
+    }
+    Ok(key)
 }
 
 /// returns the value corresponsing to the key in (GET /key/:key)
-fn get_value(_state: State) -> (State, String) {
-    unimplemented!()
-}
-
-/// update the value corresponding to the supplied key (PATCH /key/:key)
-fn update_value(_state: State) -> (State, String) {
-    unimplemented!()
-}
-
-/// delete a key value pair (DELETE /key/:key)
-fn delete_value(_state: State) -> (State, String) {
-    unimplemented!()
+async fn contains(state: &mut State) -> Result<Response<Body>, HandlerError> {
+    let node = ChordNode::borrow_from(&state);
+    let key = &PathExtractor::borrow_from(&state).key;
+    let contains = node.contains(key).await?;
+    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, contains.to_string());
+    Ok(response)
 }
 
 fn router(chord: ChordNode) -> Router {
@@ -203,20 +240,13 @@ fn router(chord: ChordNode) -> Router {
             .to_async_borrowing(update_finger_table);
         route.patch("/notify").to_async_borrowing(notify);
         route.scope("/key", |route| {
-            route.post("/").to(create_value);
+            route.post("/").to_async_borrowing(insert);
             route
-                .get("/:key") // GET /key/1234
+                .get("/:key")
                 .with_path_extractor::<PathExtractor>()
-                .to(get_value);
-            route
-                .patch("/:key") // PATCH /key/1234
-                .with_path_extractor::<PathExtractor>()
-                .to(update_value);
-            route
-                .delete("/:key") // DELETE /key/1234
-                .with_path_extractor::<PathExtractor>()
-                .to(delete_value);
+                .to_async_borrowing(contains);
         });
+        route.post("/replica").to_async_borrowing(insert_replica);
     })
 }
 
@@ -227,5 +257,3 @@ fn main() {
     println!("Listening for requests at http://{}", addr);
     gotham::start(addr, router(chord));
 }
-
-mod tests;
