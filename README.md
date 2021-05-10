@@ -2,11 +2,17 @@
 
 Crust is an implementation of [Chord](https://en.wikipedia.org/wiki/Chord_(peer-to-peer)) in Rust. On top of this, crust also builds a Distributed Hash Set that uses the underlying Chord mechanism. Click [here](https://github.com/a3y3/crust/projects/1) to see how we approached, planned, and worked on the project!
 
+## Basic mechanism
 Here's how the application looks like:
-<img source="images/chord_ring.png">
 
-If nodes fail, failure recovery is triggered that correctly adjusts the ring:
-<img source="images/chord_failure_recovery.png">
+<img src="images/chord_ring.png">
+
+Use the forms to insert a new value in the network (the application will return the ID of the node where the key was inserted) or verify if a key exists anywhere in the network.
+
+## Failure Handling
+If nodes fail, failure recovery is triggered that correctly adjusts the ring. Note that key lookups can still work because of replicas that exist in other existing nodes.
+
+<img src="images/chord_failure_recovery.png">
 
 ## Build
 `docker build . -t crust`
