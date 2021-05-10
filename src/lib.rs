@@ -30,7 +30,7 @@ const STABILIZE_INTERVAL: u64 = 2; // stabilize() is called this often
 const LIVENESS_TIMEOUT: u64 = 1; // a node must reply back in this time to be considered "alive". Nodes that can't reply back this fast enough are considered dead, triggering failure recovery.
 const REQ_TIMEOUT: u64 = 3; // HTTP requests that take longer this are marked as errors.
 
-enum Bracket {
+pub enum Bracket {
     Open,
     Closed,
 }
@@ -39,16 +39,18 @@ enum Bracket {
 /// Also, if `M` is 64, then:
 ///     1. 63 exists in the interval [45, 2]
 ///     2. 63 exists in the interval [62, 0]
-///     3. 63 exists in the interval (63, 63).
+///     3. 63 exists in the interval (1, 0).
 /// ```
+/// use crust::Interval;
+/// use crust::Bracket;
 /// let interval = Interval::new(Bracket::Closed, 45, 2, Bracket::Closed);
-/// assert_eq!(interval.contains(63), true);
+/// assert_eq!(interval.contains(63), true, "63 should be in {}", interval);
 /// let interval = Interval::new(Bracket::Closed, 62, 0, Bracket::Closed);
-/// assert_eq!(interval.contains(63), true);
-/// let interval = Interval::new(Bracket::Open, 63, 63, Bracket::Open);
-/// assert_eq!(interval.contains(63), true);
+/// assert_eq!(interval.contains(63), true, "63 should be in {}", interval);
+/// let interval = Interval::new(Bracket::Open, 1, 0, Bracket::Open);
+/// assert_eq!(interval.contains(63), true, "63 should be in {}", interval);
 /// ```
-struct Interval {
+pub struct Interval {
     bracket1: Bracket,
     val1: u64,
     bracket2: Bracket,
@@ -74,7 +76,7 @@ impl fmt::Display for Interval {
 }
 
 impl Interval {
-    fn new(bracket1: Bracket, val1: u64, val2: u64, bracket2: Bracket) -> Self {
+    pub fn new(bracket1: Bracket, val1: u64, val2: u64, bracket2: Bracket) -> Self {
         Interval {
             bracket1,
             val1,
@@ -84,7 +86,7 @@ impl Interval {
     }
 
     /// Needs improvement - right now this method uses a pretty inefficient way to check if a `val` lies between an `Interval. Selecting a `start` and `end` and walking through each value between them isn't ideal, and we need  a faster way to do this.
-    fn contains(&self, val: u64) -> bool {
+    pub fn contains(&self, val: u64) -> bool {
         let mut start = match self.bracket1 {
             Bracket::Open => (self.val1 + 1) % M,
             Bracket::Closed => self.val1,
