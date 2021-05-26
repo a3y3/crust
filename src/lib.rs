@@ -4,7 +4,6 @@ use rand::Rng;
 use reqwest::Response;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_derive::Serialize;
-use serde_json;
 use simple_error::SimpleError;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
@@ -106,7 +105,7 @@ impl Interval {
         val == start
     }
 }
-/// Represents an entry in the Chord Node's finger table. 
+/// Represents an entry in the Chord Node's finger table.
 /// start - consult the Chord paper for an explanation.
 /// interval - consult the Chord paper for an explanation.
 /// successor - the ID of the successor node of start.
@@ -156,7 +155,7 @@ impl VisInfo {
         Self { from, to }
     }
 }
-/// In-memory data structure representing the finger tables, successor list, predecessor pointers, and hash set and replica set. 
+/// In-memory data structure representing the finger tables, successor list, predecessor pointers, and hash set and replica set.
 /// Since this struct will be cloned multiple times (each time a function receives this from a `State`, it's receiving a cloned version), all writable fields in this struct should be wrapped in `Arc`. This allows fast clones and allows all function to share the same data safely (using a Mutex).
 #[derive(Clone, StateData)]
 pub struct ChordNode {
@@ -232,8 +231,7 @@ impl ChordNode {
         let mut succ_ip = self.get_successor();
         let mut successor = get_identifier(&succ_ip.to_string());
         let v = VisInfo::new(current, successor);
-        let mut result = Vec::new();
-        result.push(v);
+        let mut result = vec![v];
 
         while !set.contains(&successor) {
             current = successor;
@@ -278,7 +276,7 @@ impl ChordNode {
     }
 
     /// calculates successor(k). This represents the first node on the Chord ring that can store the key k.
-    pub async fn calculate_successor(&self, id: &String) -> Result<IpAddr, HandlerError> {
+    pub async fn calculate_successor(&self, id: &str) -> Result<IpAddr, HandlerError> {
         let id: u64 = id.parse()?;
         assert!(id < M);
         let pred = self.calculate_predecessor(id).await?;
@@ -314,7 +312,7 @@ impl ChordNode {
     }
 
     /// Returns the closest node that `Self` thinks that can store `id`.
-    pub fn closest_preceding_finger(&self, id: &String) -> IpAddr {
+    pub fn closest_preceding_finger(&self, id: &str) -> IpAddr {
         let id: u64 = id.parse().unwrap();
         assert!(id < M);
         let interval = Interval::new(
@@ -328,7 +326,7 @@ impl ChordNode {
                 return entry.node_ip;
             }
         }
-        return self.self_ip;
+        self.self_ip
     }
 
     /// called when a node wants to add itself (`s`) as an `i`th entry in `Self`'s finger table.
@@ -337,7 +335,7 @@ impl ChordNode {
         let s_id = get_identifier(&s.to_string());
         let ith_ip_id = {
             let locked_table = self.finger_table.lock().unwrap();
-            (*locked_table).get(i as usize).unwrap().successor.clone()
+            (*locked_table).get(i as usize).unwrap().successor
         };
         let interval = Interval::new(Bracket::Closed, self_id, ith_ip_id, Bracket::Open);
         if interval.contains(s_id) {
@@ -350,7 +348,9 @@ impl ChordNode {
             let pred = *self.predecessor.lock().unwrap();
             let pred_id = get_identifier(&pred.to_string());
             if pred_id == s_id {
-                println!("Warning: Skipping patching my predecessor because it's the same as s_id!");
+                println!(
+                    "Warning: Skipping patching my predecessor because it's the same as s_id!"
+                );
                 return Ok(());
             }
             println!("Done. Patching my predecessor ({})", pred_id);
@@ -406,7 +406,7 @@ impl ChordNode {
         }
     }
 
-    /// `other_node` thinks that it should be `Self`'s direct predecessor. 
+    /// `other_node` thinks that it should be `Self`'s direct predecessor.
     pub async fn notify(&self, other_node: IpAddr) {
         let predecessor = self.get_predecessor();
         let pred_id = get_identifier(&predecessor.to_string());
@@ -474,7 +474,7 @@ impl ChordNode {
 
     /// This function is called by the first function that detects that an HTTP request failed. Unfrotunately, that also means it's very hard to identify which method called `handle_failure`.
     /// For example, this method can be called during `stabilize()` or when calculating a successor. Although in an ideal case both functions should have handled this very differently (for example, in an ideal scenario, `calculate_successor()` should notify the user that there was a failure and that they should try again; instead of just calling `handle_failure`).
-    /// Right now, this method simply contacts the successor and predecessor and attempts to fix these pointers by using the `successor_list`. 
+    /// Right now, this method simply contacts the successor and predecessor and attempts to fix these pointers by using the `successor_list`.
     async fn handle_failure(&self) {
         // check if successor is alive
         println!("Failure detected, attempting to fix pointers...");
@@ -527,11 +527,11 @@ impl ChordNode {
         }
     }
 
-    /// used by `handle_failure` to contact each potential successor in `successor_list` and returning the first node that responds. 
+    /// used by `handle_failure` to contact each potential successor in `successor_list` and returning the first node that responds.
     async fn get_first_live_successor(&self, client: &reqwest::Client) -> IpAddr {
         let entries: Vec<IpAddr> = {
             let table = self.successor_list.lock().unwrap();
-            table.iter().map(|ip| *ip).collect()
+            table.iter().copied().collect()
         };
 
         for possible_succ in entries {
@@ -590,7 +590,7 @@ impl ChordNode {
     }
 
     /// Uses `calculate_successor()` to find the node that's responsible for `key`, then asks that node if it has a key.
-    pub async fn contains(&self, key: &String) -> Result<bool, HandlerError> {
+    pub async fn contains(&self, key: &str) -> Result<bool, HandlerError> {
         let key_id = get_identifier(key);
         let key_successor = self.calculate_successor(&key_id.to_string()).await?;
         if key_successor == self.self_ip {
@@ -617,7 +617,7 @@ impl ChordNode {
     }
 }
 
-/// Creates and returns a new `ChordNode`. 
+/// Creates and returns a new `ChordNode`.
 /// This is comparatively easier when there are no arguments; this means that this node will be the first node in the ring. If there's an argument, it must be an IP address; that IP address will then be contacted and used to initialize this node's successor and predecessor fields.
 pub fn initialize_node() -> ChordNode {
     let args: Vec<String> = env::args().collect();
@@ -637,13 +637,12 @@ pub fn initialize_node() -> ChordNode {
             finger_table.push(first_entry);
         }
 
-        return ChordNode::new(finger_table, hash_map, self_ip, self_ip);
+        ChordNode::new(finger_table, hash_map, self_ip, self_ip)
     } else {
-        let node = tokio::runtime::Runtime::new()
+        tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(join(self_ip, args[1].parse().unwrap()))
-            .unwrap();
-        node
+            .unwrap()
     }
 }
 
@@ -811,10 +810,7 @@ async fn is_node_alive(ip: IpAddr, client: Option<&reqwest::Client>) -> bool {
         .timeout(Duration::from_secs(LIVENESS_TIMEOUT))
         .send()
         .await;
-    match response {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    response.is_ok()
 }
 
 pub fn start_stabilize_thread(chord_node: ChordNode) {
@@ -845,11 +841,11 @@ fn get_self_ip() -> IpAddr {
 }
 
 /// Hash a key and return hash(key)%M.
-pub fn get_identifier(key: &String) -> u64 {
-    fn hasher(key: &String) -> u64 {
+pub fn get_identifier(key: &str) -> u64 {
+    fn hasher(key: &str) -> u64 {
         let mut s = DefaultHasher::new();
         key.hash(&mut s);
         s.finish()
     }
-    hasher(key) % M
+    hasher(&key.to_string()) % M
 }

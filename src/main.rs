@@ -66,8 +66,8 @@ async fn update_predecessor(state: &mut State) -> Result<Response<Body>, Handler
             ip = value;
         }
     }
-    if ip == "" {
-        let error = SimpleError::new(format!("Invalid data, expected ip:address"));
+    if ip.is_empty() {
+        let error = SimpleError::new("Invalid data, expected ip:address".to_string());
         let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
         return Err(handler_error);
     }
@@ -112,7 +112,7 @@ async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
     Ok(resp)
 }
 
-/// update the finger tables of a node (PATCH /fingertable/) 
+/// update the finger tables of a node (PATCH /fingertable/)
 async fn update_finger_table(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let full_body = body::to_bytes(Body::take_from(state)).await?;
     let data = form_urlencoded::parse(&full_body).into_owned();
@@ -143,14 +143,15 @@ async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let data = form_urlencoded::parse(&full_body).into_owned();
     let mut n = String::new();
     for (key, value) in data {
-        if key == "n" {
+        if key.is_empty() {
             n = value;
         }
     }
-    if n == "" {
-        let error = SimpleError::new(format!(
+    if n.is_empty() {
+        let error = SimpleError::new(
             "Invalid data, expected n: IP address of node that created this PATCH request"
-        ));
+                .to_string(),
+        );
         let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
         return Err(handler_error);
     }
@@ -170,7 +171,7 @@ async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
         &state,
         StatusCode::OK,
         TEXT_PLAIN,
-        format!("{}", inserted_at_id),
+        inserted_at_id,
     );
     Ok(response)
 }
