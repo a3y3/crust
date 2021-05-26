@@ -20,6 +20,30 @@ use lib::start_stabilize_thread;
 use lib::ChordNode;
 
 const PORT: usize = 8000;
+
+fn empty_response(state: &State) -> Result<Response<Body>, HandlerError> {
+    Ok(create_response(
+        &state,
+        StatusCode::OK,
+        TEXT_PLAIN,
+        "".to_string(),
+    ))
+}
+
+async fn extract_val_from_req(state: &mut State, key: String) -> Result<String, HandlerError> {
+    let full_body = body::to_bytes(Body::take_from(state)).await?;
+    let data = form_urlencoded::parse(&full_body).into_owned();
+    for (k, v) in data {
+        if k == key {
+            return Ok(v);
+        }
+    }
+
+    let error = SimpleError::new(format!("Invalid key {}, expected key: ip.", key));
+    let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
+    Err(handler_error)
+}
+
 /// returns the immediate successor of this node (GET /successor/)
 fn get_successor(state: State) -> (State, String) {
     let node = ChordNode::borrow_from(&state);
@@ -29,24 +53,11 @@ fn get_successor(state: State) -> (State, String) {
 
 /// Update a node's successor to a new node (PATCH /successor/)
 async fn update_successor(state: &mut State) -> Result<Response<Body>, HandlerError> {
-    let full_body = body::to_bytes(Body::take_from(state)).await?;
-    let data = form_urlencoded::parse(&full_body).into_owned();
-    let mut ip = String::new();
-    for (key, value) in data {
-        if key == "ip" {
-            ip = value;
-        } else {
-            let error = SimpleError::new(format!("Invalid key {}, expected key: ip.", key));
-            let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
-            return Err(handler_error);
-        }
-    }
-
+    let ip = extract_val_from_req(state, "ip".to_string()).await?;
     let node = state.borrow_mut::<ChordNode>();
     println!("Will update my successor to {}", ip);
     node.update_successor(ip.parse()?);
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
-    Ok(response)
+    empty_response(&state)
 }
 
 /// returns the immediate successor of this node (GET /predecessor/)
@@ -58,25 +69,11 @@ fn get_predecessor(state: State) -> (State, String) {
 
 /// update a node's predecessor pointer (PATCH /predecessor/)
 async fn update_predecessor(state: &mut State) -> Result<Response<Body>, HandlerError> {
-    let full_body = body::to_bytes(Body::take_from(state)).await?;
-    let data = form_urlencoded::parse(&full_body).into_owned();
-    let mut ip = String::new();
-    for (key, value) in data {
-        if key == "ip" {
-            ip = value;
-        }
-    }
-    if ip.is_empty() {
-        let error = SimpleError::new("Invalid data, expected ip:address".to_string());
-        let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
-        return Err(handler_error);
-    }
-
+    let ip = extract_val_from_req(state, "ip".to_string()).await?;
     let node = state.borrow::<ChordNode>();
     println!("Will update my predecessor to {}", ip);
     node.update_predecessor(ip.parse()?);
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
-    Ok(response)
+    empty_response(&state)
 }
 
 /// calculates the successor(key) and returns the IP address and ID of the node.
@@ -85,8 +82,12 @@ async fn calculate_successor(state: &mut State) -> Result<Response<Body>, Handle
     let id = &PathExtractor::borrow_from(&state).key;
     println!("calculate_successor: calculating successor for: {}", id);
     let res = node.calculate_successor(id).await?;
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, res.to_string());
-    Ok(response)
+    Ok(create_response(
+        &state,
+        StatusCode::OK,
+        TEXT_PLAIN,
+        res.to_string(),
+    ))
 }
 
 /// Find the closest predecessing finger for a given id (GET /successor/cfp/:id)
@@ -108,8 +109,12 @@ async fn info(state: &mut State) -> Result<Response<Body>, HandlerError> {
 async fn get_ring(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let ring = node.ring_info().await?;
-    let resp = create_response(&state, StatusCode::OK, mime::APPLICATION_JSON, ring);
-    Ok(resp)
+    Ok(create_response(
+        &state,
+        StatusCode::OK,
+        mime::APPLICATION_JSON,
+        ring,
+    ))
 }
 
 /// update the finger tables of a node (PATCH /fingertable/)
@@ -133,73 +138,36 @@ async fn update_finger_table(state: &mut State) -> Result<Response<Body>, Handle
     let i: u64 = i.parse()?;
     let node = state.borrow_mut::<ChordNode>();
     node.update_finger_table(s, i).await?;
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
-    Ok(response)
+    empty_response(&state)
 }
 
 /// Notify a node that there might be a better predecessor (PATCH /notify/)
 async fn notify(state: &mut State) -> Result<Response<Body>, HandlerError> {
-    let full_body = body::to_bytes(Body::take_from(state)).await?;
-    let data = form_urlencoded::parse(&full_body).into_owned();
-    let mut n = String::new();
-    for (key, value) in data {
-        if key.is_empty() {
-            n = value;
-        }
-    }
-    if n.is_empty() {
-        let error = SimpleError::new(
-            "Invalid data, expected n: IP address of node that created this PATCH request"
-                .to_string(),
-        );
-        let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
-        return Err(handler_error);
-    }
-
+    let n = extract_val_from_req(state, "n".to_string()).await?;
     let node = state.borrow::<ChordNode>();
     node.notify(n.parse()?).await;
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
-    Ok(response)
+    empty_response(&state)
 }
 
 /// add a new key to the DST (supplied as POST to /key/)
 async fn insert(state: &mut State) -> Result<Response<Body>, HandlerError> {
-    let key = get_key_from_body(state).await?;
+    let key = extract_val_from_req(state, "key".to_string()).await?;
     let node = state.borrow::<ChordNode>();
     let inserted_at_id = node.insert(key).await?;
-    let response = create_response(
+    Ok(create_response(
         &state,
         StatusCode::OK,
         TEXT_PLAIN,
         inserted_at_id,
-    );
-    Ok(response)
+    ))
 }
 
 /// Adds a key to a node's replica_state field. (POST /replica/)
 async fn insert_replica(state: &mut State) -> Result<Response<Body>, HandlerError> {
-    let key = get_key_from_body(state).await?;
+    let key = extract_val_from_req(state, "key".to_string()).await?;
     let node = state.borrow::<ChordNode>();
     node.insert_replica(key);
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, "".to_string());
-    Ok(response)
-}
-
-/// Return the field `key` from a POST body.
-async fn get_key_from_body(state: &mut State) -> Result<String, HandlerError> {
-    let full_body = body::to_bytes(Body::take_from(state)).await?;
-    let data = form_urlencoded::parse(&full_body).into_owned();
-    let mut key = String::new();
-    for (k, v) in data {
-        if k == "key" {
-            key = v;
-        } else {
-            let error = SimpleError::new(format!("Invalid key {}, expected key: 'key'", k));
-            let handler_error = HandlerError::from(error).with_status(StatusCode::BAD_REQUEST);
-            return Err(handler_error);
-        }
-    }
-    Ok(key)
+    empty_response(&state)
 }
 
 /// returns the value corresponsing to the key in (GET /key/:key)
@@ -207,8 +175,12 @@ async fn contains(state: &mut State) -> Result<Response<Body>, HandlerError> {
     let node = ChordNode::borrow_from(&state);
     let key = &PathExtractor::borrow_from(&state).key;
     let contains = node.contains(key).await?;
-    let response = create_response(&state, StatusCode::OK, TEXT_PLAIN, contains.to_string());
-    Ok(response)
+    Ok(create_response(
+        &state,
+        StatusCode::OK,
+        TEXT_PLAIN,
+        contains.to_string(),
+    ))
 }
 
 fn router(chord: ChordNode) -> Router {
